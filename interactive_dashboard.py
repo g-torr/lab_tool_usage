@@ -53,11 +53,10 @@ def create_dashboard(df):
        'clickData')]
     )
     def update_charts(click_data):
-        if click_data is None:
-            filtered_df = df[df['year_month'] == year_month]
-        else:
+        year_month = None
+        if click_data is not None:
             year_month = click_data['points'][0]['text']
-            filtered_df = df[df['year_month'] == year_month]
+        filtered_df = df[df['year_month'] == year_month]
 
         fig1 = px.area(filtered_df, x='year_month', y='mention_count', 
        color='standardized_machine', title='Market Share Evolution')

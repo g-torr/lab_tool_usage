@@ -25,6 +25,8 @@ def analyze_and_plot():
     if df.empty:
         print("No machine mentions found in the database yet to plot!")
         return
+    else:
+        print(df.head())  # Add this line to print the first few rows of the DataFrame
 
     # 2. Pivot data to get total mentions per month to compute % share
     pivot_df = df.pivot(index='year_month', columns='standardized_machine', values='mention_count').fillna(0)

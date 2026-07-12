@@ -71,4 +71,4 @@ if __name__ == "__main__":
     df = analyze_data()
     if df is not None:
         app = create_dashboard(df)
-        app.run_server(debug=True)
+        app.run(debug=True)

@@ -41,16 +41,13 @@ def create_dashboard(df):
     app.layout = html.Div([
         html.H1("Spatial Transcriptomics Market Share Evolution (bioRxiv Mentions)"),
         dcc.Graph(id='market-share-chart'),
-
-       dcc.Graph(id='mention-volume-chart')
+        dcc.Graph(id='mention-volume-chart')
     ])
 
     @app.callback(
-        [Output('market-share-chart', 
-       'figure'),
+        [Output('market-share-chart', 'figure'),
          Output('mention-volume-chart', 'figure')],
-        [Input('market-share-chart', 
-       'clickData')]
+        [Input('market-share-chart', 'clickData')]
     )
     def update_charts(click_data):
         year_month = None
@@ -58,10 +55,8 @@ def create_dashboard(df):
             year_month = click_data['points'][0]['text']
         filtered_df = df[df['year_month'] == year_month]
 
-        fig1 = px.area(filtered_df, x='year_month', y='mention_count', 
-       color='standardized_machine', title='Market Share Evolution')
-        fig2 = px.bar(filtered_df, x='year_month', 
-       y='mention_count', color='standardized_machine', title='Mention Volume')
+        fig1 = px.area(filtered_df, x='year_month', y='mention_count', color='standardized_machine', title='Market Share Evolution')
+        fig2 = px.bar(filtered_df, x='year_month', y='mention_count', color='standardized_machine', title='Mention Volume')
 
         return fig1, fig2
 

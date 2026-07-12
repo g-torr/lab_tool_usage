@@ -33,7 +33,7 @@ def analyze_data():
         print("No data found in the database.")
         return None
 
-    print(df)  # Add this line to print the DataFrame
+    print(df.head())  # Add this line to print the first few rows of the DataFrame
     return df
 
 def create_dashboard(df):
@@ -51,10 +51,11 @@ def create_dashboard(df):
         [Input('market-share-chart', 'clickData')]
     )
     def update_charts(click_data):
-        year_month = None
-        if click_data is not None:
+        if click_data is None:
+            filtered_df = df
+        else:
             year_month = click_data['points'][0]['text']
-        filtered_df = df[df['year_month'] == year_month]
+            filtered_df = df[df['year_month'] == year_month]
 
         fig1 = px.area(filtered_df, x='year_month', y='mention_count', color='standardized_machine', title='Market Share Evolution')
         fig2 = px.bar(filtered_df, x='year_month', y='mention_count', color='standardized_machine', title='Mention Volume')

@@ -31,7 +31,11 @@ def analyze_data():
 
     if df.empty:
         print("No data found in the database.")
-        create_dashboard(df):
+        return None
+
+    return df
+
+def create_dashboard(df):
     app = dash.Dash(__name__)
 
     app.layout = html.Div([
@@ -65,8 +69,7 @@ def analyze_data():
 
         return fig1, fig2
 
-    
-       return app
+    return app
 
 if __name__ == "__main__":
     df = analyze_data()

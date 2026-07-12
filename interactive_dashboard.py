@@ -39,8 +39,7 @@ def create_dashboard(df):
     app = dash.Dash(__name__)
 
     app.layout = html.Div([
-        html.H1("Spatial 
-       Transcriptomics Market Share Evolution (bioRxiv Mentions)"),
+        html.H1("Spatial Transcriptomics Market Share Evolution (bioRxiv Mentions)"),
         dcc.Graph(id='market-share-chart'),
 
        dcc.Graph(id='mention-volume-chart')
@@ -55,12 +54,10 @@ def create_dashboard(df):
     )
     def update_charts(click_data):
         if click_data is None:
-            filtered_df 
-       = df
+            filtered_df = df[df['year_month'] == year_month]
         else:
             year_month = click_data['points'][0]['text']
-            filtered_df = 
-       df[df['year_month'] == year_month]
+            filtered_df = df[df['year_month'] == year_month]
 
         fig1 = px.area(filtered_df, x='year_month', y='mention_count', 
        color='standardized_machine', title='Market Share Evolution')

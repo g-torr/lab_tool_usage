@@ -33,6 +33,7 @@ def analyze_data():
         print("No data found in the database.")
         return None
 
+    print(df)  # Add this line to print the DataFrame
     return df
 
 def create_dashboard(df):

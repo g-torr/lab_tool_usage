@@ -1,0 +1,28 @@
+.aider*
+.env
+.env.*
+.env.swp
+
+# Local virtual environments
+venv/
+.venv/
+
+# Local data and model artifacts
+data/
+db/
+*.db
+*.sqlite
+*.sqlite3
+export.csv
+high_end_instruments.json
+local_market_share.db
+model/
+notebook.ipynb
+openrouter/
+spatial_market_share.png
+poetry.lock
+
+# Editor and OS noise
+*.swp
+__pycache__/
+*.pyc

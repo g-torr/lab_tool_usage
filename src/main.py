@@ -6,6 +6,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from bs4 import BeautifulSoup
 import logging
+from config import DB_NAME
 
 # Import from your local files (adjust 'lib.' prefix if they are in the same directory)
 from semantic_resolver import SemanticMachineResolver
@@ -15,7 +16,6 @@ from machine_extractor import (
     load_registry_gazetteer, 
     load_stage2_labels
 )
-from  normalise_machine import DB_NAME
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)

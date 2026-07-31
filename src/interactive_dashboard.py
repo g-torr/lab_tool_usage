@@ -1,34 +1,34 @@
+import sys
+from pathlib import Path
+sys.path.append(str(Path(__file__).resolve().parent.parent))
+
 import sqlite3
 import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
-import        dash
+import dash
 from dash import dcc, html
 from dash.dependencies import Input, Output
-import plotly.express as    px
+import plotly.express as px
+from config import DB_NAME
 
-DB_NAME = "../db/local_market_share.db"
+
+def resolve_db_path():
+    return DB_NAME
+
 
 def analyze_data():
-    # 1. Connect and query database
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(resolve_db_path())
 
     query = """
         SELECT
             strftime('%Y-%m', c.date) AS year_month,
-            m.resolved_machine ,
+            COALESCE(m.resolved_machine, 'Unresolved') AS resolved_machine,
             COUNT(*) AS mention_count
         FROM candidates c
         JOIN machine_mentions m ON c.doi = m.doi
-        WHERE m.resolved_machine NOT IN (
-            SELECT resolved_machine 
-            FROM machine_mentions 
-            GROUP BY resolved_machine 
-            HAVING COUNT(*) > 50
-        )
-        GROUP BY year_month, m.resolved_machine;
-    
-       """
+        WHERE c.date IS NOT NULL
+        GROUP BY year_month, COALESCE(m.resolved_machine, 'Unresolved')
+        ORDER BY year_month, mention_count DESC;
+    """
 
     df = pd.read_sql_query(query, conn)
     conn.close()
@@ -37,7 +37,7 @@ def analyze_data():
         print("No data found in the database.")
         return None
 
-    print(df.head())  # Add this line to print the first few rows of the DataFrame
+    print(df.head())
     return df
 
 def create_dashboard(df):

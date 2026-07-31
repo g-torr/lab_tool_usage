@@ -35,7 +35,7 @@ class SemanticMachineResolver:
         # 1. Remove parentheticals (e.g., "(BD Biosciences)", "(Thermo Fisher)")
         cleaned = re.sub(r'\([^)]*\)', '', text)
         # 2. Remove generic filler words that dilute the core entity signal
-        filler_words = ["platform", "system", "using", "kit", "reagent", "version", "software", "analyzer", "controller", "device"]
+        filler_words = ["platform", "system", "using", "kit", "reagent", "version", "software", "device"]
         for word in filler_words:
             cleaned = re.sub(rf'\b{word}\b', '', cleaned, flags=re.IGNORECASE)
         return cleaned.strip()

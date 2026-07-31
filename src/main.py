@@ -8,11 +8,15 @@ from bs4 import BeautifulSoup
 import logging
 
 # Import from your local files (adjust 'lib.' prefix if they are in the same directory)
-from LLM_extraction import  MachineExtraction
-from machine_extractor import extract_all_machines
 from semantic_resolver import SemanticMachineResolver
 from create_registry import create_registry
+from machine_extractor import (
+    extract_machines_hybrid, 
+    load_registry_gazetteer, 
+    load_stage2_labels
+)
 from  normalise_machine import DB_NAME
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -201,20 +205,24 @@ def fetch_methods_text_from_web(doi):
 # STAGE 3: LLM + SEMANTIC RESOLUTION
 # ==========================================
 from novelty_classifier import classify_novelty
-from machine_extractor import extract_all_machines
 from semantic_resolver import SemanticMachineResolver
 
 def pipeline_stage_3_execution():
     """
     Three-stage pipeline:
     1. Novelty classification (fast, cheap)
-    2. Machine extraction (chunked, thorough)
+    2. Hybrid Machine extraction (Gazetteer candidate matching + GLiNER)
     3. Semantic resolution (local, instant)
     """
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     
-    # Initialize resolver once
+    # 1. Initialize gazetteer and target labels from candidate registry
+    print("Loading Candidate Registry Gazetteer and Stage 2 Labels...")
+    load_registry_gazetteer('machine_registry.csv')
+    target_labels = load_stage2_labels()
+    
+    # 2. Initialize resolver once
     print("Initializing Semantic Machine Resolver...")
     resolver = SemanticMachineResolver('machine_registry.csv')
     
@@ -237,7 +245,7 @@ def pipeline_stage_3_execution():
             conn.commit()
             continue
         
-        # STAGE 1: Novelty Classification (fast, uses only first 2000 chars)
+        # STAGE 1: Novelty Classification
         print(f"\n   [STAGE 1/3] Classifying novelty...")
         novelty_result = classify_novelty(abstract, methods_text[:2000])
         
@@ -249,9 +257,11 @@ def pipeline_stage_3_execution():
         
         print(f"   ✅ [NOVEL] {novelty_result.reasoning}")
         
-        # STAGE 2: Machine Extraction (chunked, thorough)
-        print(f"\n   [STAGE 2/3] Extracting machines from {len(methods_text)} chars...")
-        raw_machines = extract_all_machines(methods_text)
+        # STAGE 2: Hybrid Machine Extraction (Gazetteer + GLiNER)
+        print(f"\n   [STAGE 2/3] Extracting candidates from {len(methods_text)} chars...")
+        
+        # UPDATED CALL: Uses hybrid gazetteer + GLiNER extraction
+        raw_machines = extract_machines_hybrid(methods_text, target_labels=target_labels)
         
         if not raw_machines:
             print(f"   ⚠️  [NO MACHINES] No equipment mentioned in methods.")
@@ -259,10 +269,10 @@ def pipeline_stage_3_execution():
             conn.commit()
             continue
         
-        print(f"   ✅ Found {len(raw_machines)} unique machines.")
+        print(f"   ✅ Found {len(raw_machines)} candidate machine mentions.")
         
-        # STAGE 3: Semantic Resolution (local, instant)
-        print(f"\n   [STAGE 3/3] Resolving {len(raw_machines)} machines...")
+        # STAGE 3: Semantic Resolution
+        print(f"\n   [STAGE 3/3] Resolving {len(raw_machines)} candidates...")
         for raw_machine in raw_machines:
             resolved_name, parent, ticker, conf = resolver.resolve(raw_machine)
             
@@ -281,7 +291,7 @@ def pipeline_stage_3_execution():
         
         cursor.execute("UPDATE candidates SET processed = 1 WHERE doi = ?", (doi,))
         conn.commit()
-    
+
     conn.close()
     print(f"\n{'='*70}")
     print("Pipeline execution complete.")
@@ -300,5 +310,5 @@ if __name__ == "__main__":
         logger.info("Deleted old database to apply new schema.")
         
     # 3. Run pipeline
-    pipeline_stage_1_and_2("2026-01-01", "2026-01-17")
+    pipeline_stage_1_and_2("2025-01-01", "2026-07-17")
     pipeline_stage_3_execution()

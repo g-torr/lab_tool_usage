@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from main import fetch_methods_text_from_web, init_db, DB_NAME
 from novelty_classifier import classify_novelty
-from machine_extractor import extract_all_machines
+from machine_extractor import extract_machines_from_chunk_fast
 from semantic_resolver import SemanticMachineResolver
 from create_registry import create_registry
 
@@ -61,7 +61,7 @@ def test_full_pipeline():
     print(f"\n[3/4] Testing Machine Extraction (Chunked)")
     print("-" * 80)
     try:
-        raw_machines = extract_all_machines(methods_text)
+        raw_machines = extract_machines_from_chunk_fast(methods_text)
         print(f"   ✅ Machine Extraction Received")
         print(f"      Total Unique Machines Found: {len(raw_machines)}")
         if raw_machines:

@@ -22,6 +22,15 @@ class MachineExtractorTests(unittest.TestCase):
         finally:
             machine_extractor.extract_machines_from_chunk = original
 
+    def test_extract_machines_from_chunk_uses_local_backend_response(self):
+        original = machine_extractor._query_model
+        machine_extractor._query_model = lambda *args, **kwargs: machine_extractor.MachineExtraction(machines=["Illumina"])
+        try:
+            result = machine_extractor.extract_machines_from_chunk("some methods text")
+            self.assertEqual(result.machines, ["Illumina"])
+        finally:
+            machine_extractor._query_model = original
+
 
 if __name__ == "__main__":
     unittest.main()

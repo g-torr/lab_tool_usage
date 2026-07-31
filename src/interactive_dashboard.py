@@ -7,7 +7,7 @@ from dash import dcc, html
 from dash.dependencies import Input, Output
 import plotly.express as    px
 
-DB_NAME = "local_market_share.db"
+DB_NAME = "../db/local_market_share.db"
 
 def analyze_data():
     # 1. Connect and query database
@@ -16,17 +16,17 @@ def analyze_data():
     query = """
         SELECT
             strftime('%Y-%m', c.date) AS year_month,
-            m.standardized_machine,
+            m.resolved_machine ,
             COUNT(*) AS mention_count
         FROM candidates c
         JOIN machine_mentions m ON c.doi = m.doi
-        WHERE m.standardized_machine NOT IN (
-            SELECT standardized_machine 
+        WHERE m.resolved_machine NOT IN (
+            SELECT resolved_machine 
             FROM machine_mentions 
-            GROUP BY standardized_machine 
+            GROUP BY resolved_machine 
             HAVING COUNT(*) > 50
         )
-        GROUP BY year_month, m.standardized_machine;
+        GROUP BY year_month, m.resolved_machine;
     
        """
 
@@ -61,8 +61,8 @@ def create_dashboard(df):
             year_month = click_data['points'][0]['text']
             filtered_df = df[df['year_month'] == year_month]
 
-        fig1 = px.area(filtered_df, x='year_month', y='mention_count', color='standardized_machine', title='Market Share Evolution')
-        fig2 = px.bar(filtered_df, x='year_month', y='mention_count', color='standardized_machine', title='Mention Volume')
+        fig1 = px.area(filtered_df, x='year_month', y='mention_count', color='resolved_machine', title='Market Share Evolution')
+        fig2 = px.bar(filtered_df, x='year_month', y='mention_count', color='resolved_machine', title='Mention Volume')
 
         return fig1, fig2
 

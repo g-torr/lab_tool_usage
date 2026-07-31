@@ -1,0 +1,10 @@
+openai
+instructor
+pydantic
+requests
+beautifulsoup4
+lxml
+pandas
+sentence-transformers
+scikit-learn
+torch

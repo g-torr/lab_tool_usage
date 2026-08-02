@@ -12,6 +12,24 @@ jobs:
         with:
           python-version: '3.10'
       - run: pip install -r requirements.txt
+      - run: |
+          python - <<'PY'
+          import os
+          import psycopg2
+
+          database_url = os.environ.get('DATABASE_URL')
+          if not database_url:
+              raise SystemExit('DATABASE_URL is not set')
+
+          conn = psycopg2.connect(database_url)
+          with conn.cursor() as cur:
+              cur.execute('SELECT 1')
+              result = cur.fetchone()
+          conn.close()
+          print('Database connectivity test passed:', result)
+          PY
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
       - run: python src/main.py --append
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}

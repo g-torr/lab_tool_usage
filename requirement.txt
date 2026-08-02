@@ -8,3 +8,4 @@ pandas
 sentence-transformers
 scikit-learn
 torch
+psycopg2-binary

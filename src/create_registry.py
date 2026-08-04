@@ -1,8 +1,14 @@
 import json
+from pathlib import Path
+
 import pandas as pd
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DATA_DIR = PROJECT_ROOT / "data"
 
 
 def create_registry():
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
     registry_data = [
         # --- GENOMICS & SEQUENCING ---
         {
@@ -533,10 +539,10 @@ def create_registry():
     df_registry["aliases"] = df_registry["aliases"].apply(json.dumps)
 
     # 3. Save machine registry CSV
-    df_registry.to_csv("../data/machine_registry.csv", index=False)
+    df_registry.to_csv(DATA_DIR / "machine_registry.csv", index=False)
 
     # 4. Save Stage 2 extraction target labels JSON
-    with open("../data/stage2_labels.json", "w") as f:
+    with open(DATA_DIR / "stage2_labels.json", "w") as f:
         json.dump(stage2_target_labels, f, indent=2)
 
     print("=" * 70)

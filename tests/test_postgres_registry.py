@@ -3,7 +3,6 @@ import sys
 from pathlib import Path
 
 import pytest
-from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -11,8 +10,6 @@ sys.path.insert(0, str(ROOT))
 from src.create_registry import create_registry
 from src.machine_extractor import load_stage2_labels, load_registry_gazetteer
 from src.db import get_db_connection
-
-load_dotenv()
 
 
 def cleanup_registry_tables():

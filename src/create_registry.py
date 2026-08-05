@@ -1,14 +1,16 @@
 import json
+import sys
 from pathlib import Path
 
-import pandas as pd
-
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DATA_DIR = PROJECT_ROOT / "data"
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+import pandas as pd
+from src.db import get_db_connection
 
 
 def create_registry():
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
     registry_data = [
         # --- GENOMICS & SEQUENCING ---
         {
@@ -535,28 +537,72 @@ def create_registry():
         df_registry["gliner_label"].dropna().unique().tolist()
     )
 
-    # 2. Convert aliases array into JSON strings for CSV compatibility
+    # 2. Convert aliases array into JSON strings for storage compatibility
     df_registry["aliases"] = df_registry["aliases"].apply(json.dumps)
 
-    # 3. Save machine registry CSV
-    df_registry.to_csv(DATA_DIR / "machine_registry.csv", index=False)
+    conn = get_db_connection()
+    cursor = conn.cursor()
 
-    # 4. Save Stage 2 extraction target labels JSON
-    with open(DATA_DIR / "stage2_labels.json", "w") as f:
-        json.dump(stage2_target_labels, f, indent=2)
+    cursor.execute(
+        "CREATE TABLE IF NOT EXISTS registry_machines ("
+        "canonical_name TEXT PRIMARY KEY, "
+        "vendor TEXT, "
+        "parent_company TEXT, "
+        "ticker TEXT, "
+        "category TEXT, "
+        "gliner_label TEXT, "
+        "revenue_model TEXT, "
+        "aliases TEXT"
+        ")"
+    )
+
+    cursor.execute(
+        "CREATE TABLE IF NOT EXISTS stage2_labels ("
+        "label TEXT PRIMARY KEY"
+        ")"
+    )
+
+    insert_machines = [(
+        row["canonical_name"],
+        row["vendor"],
+        row["parent_company"],
+        row["ticker"],
+        row["category"],
+        row["gliner_label"],
+        row["revenue_model"],
+        row["aliases"]
+    ) for _, row in df_registry.iterrows()]
+
+    cursor.executemany(
+        "INSERT INTO registry_machines (canonical_name, vendor, parent_company, ticker, category, gliner_label, revenue_model, aliases) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
+        "ON CONFLICT (canonical_name) DO UPDATE SET "
+        "vendor = EXCLUDED.vendor, "
+        "parent_company = EXCLUDED.parent_company, "
+        "ticker = EXCLUDED.ticker, "
+        "category = EXCLUDED.category, "
+        "gliner_label = EXCLUDED.gliner_label, "
+        "revenue_model = EXCLUDED.revenue_model, "
+        "aliases = EXCLUDED.aliases",
+        insert_machines
+    )
+
+    insert_labels = [(label,) for label in stage2_target_labels]
+    cursor.executemany(
+        "INSERT INTO stage2_labels (label) VALUES (%s) "
+        "ON CONFLICT (label) DO NOTHING",
+        insert_labels
+    )
+
+    conn.commit()
+    cursor.close()
+    conn.close()
 
     print("=" * 70)
     print("REGISTRY GENERATION COMPLETE")
     print("=" * 70)
-    print(
-        f"• Saved {len(df_registry)} hardware entries to 'machine_registry.csv'"
-    )
-    print(
-        f"• Derived {len(stage2_target_labels)} GLiNER labels to 'stage2_labels.json'"
-    )
-    print("\nStage 2 GLiNER Target Labels:")
-    for label in stage2_target_labels:
-        print(f"  - {label}")
+    print(f"• Stored {len(df_registry)} hardware entries in PostgreSQL")
+    print(f"• Stored {len(stage2_target_labels)} stage2 labels in PostgreSQL")
 
 
 if __name__ == "__main__":

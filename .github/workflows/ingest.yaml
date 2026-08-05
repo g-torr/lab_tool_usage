@@ -30,6 +30,10 @@ jobs:
           PY
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      - run: pip install pytest
+      - run: pytest tests/test_postgres_registry.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
       - run: python src/main.py --append
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}

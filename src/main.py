@@ -230,11 +230,11 @@ def pipeline_stage_3_execution():
     cursor = conn.cursor()
     
     print("Loading Candidate Registry Gazetteer and Stage 2 Labels...")
-    load_registry_gazetteer('machine_registry.csv')
+    load_registry_gazetteer()
     target_labels = load_stage2_labels()
     
     print("Initializing Semantic Machine Resolver...")
-    resolver = SemanticMachineResolver('machine_registry.csv')
+    resolver = SemanticMachineResolver()
     
     cursor.execute("SELECT doi, abstract FROM candidates WHERE processed = 0")
     unprocessed = cursor.fetchall()

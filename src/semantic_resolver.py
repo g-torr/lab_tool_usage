@@ -3,15 +3,17 @@ import json
 import numpy as np
 import re
 from sentence_transformers import SentenceTransformer, util, CrossEncoder
+from src.db import get_db_connection
 
 class SemanticMachineResolver:
     def __init__(self, 
-                 registry_path='machine_registry.csv', 
                  bi_encoder_model='all-MiniLM-L6-v2', 
                  cross_encoder_model='cross-encoder/ms-marco-MiniLM-L-6-v2'):
         
-        print(f"Loading registry from {registry_path}...")
-        self.registry = pd.read_csv(registry_path)
+        print("Loading registry from PostgreSQL...")
+        conn = get_db_connection()
+        self.registry = pd.read_sql_query("SELECT * FROM registry_machines", conn)
+        conn.close()
         
         def build_search_text(row):
             aliases = json.loads(row['aliases']) if pd.notna(row['aliases']) else []

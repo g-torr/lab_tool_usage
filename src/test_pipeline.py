@@ -4,13 +4,12 @@ Tests the complete flow: Methods Extraction → Novelty Classification → Machi
 """
 import os
 import sys
-import sqlite3
 from dotenv import load_dotenv
 
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from main import fetch_methods_text_from_web, init_db, DB_NAME
+from main import fetch_methods_text_from_web
 from novelty_classifier import classify_novelty
 from machine_extractor import extract_machines_from_chunk_fast
 from semantic_resolver import SemanticMachineResolver
@@ -74,13 +73,11 @@ def test_full_pipeline():
     print(f"\n[4/4] Testing Semantic Resolver")
     print("-" * 80)
     try:
-        # Create registry if it doesn't exist
-        if not os.path.exists('machine_registry.csv'):
-            print("   Creating machine registry...")
-            create_registry()
+        print("   Creating registry data in PostgreSQL...")
+        create_registry()
         
         print("   Initializing SemanticMachineResolver...")
-        resolver = SemanticMachineResolver('machine_registry.csv')
+        resolver = SemanticMachineResolver()
         print("   ✅ Resolver initialized successfully")
         
         if not raw_machines:

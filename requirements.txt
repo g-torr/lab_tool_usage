@@ -11,3 +11,4 @@ torch
 psycopg2-binary
 flashtext
 gliner
+python-dotenv

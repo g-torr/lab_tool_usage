@@ -1,7 +1,7 @@
 name: Scheduled Pipeline
 on:
   schedule:
-    - cron: '0 2 * * *' # Runs daily at 2 AM
+    - cron: '0 * * * *' # Runs every hour
   workflow_dispatch: # Allows manual triggering
 jobs:
   run-pipeline:

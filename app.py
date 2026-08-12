@@ -80,7 +80,7 @@ is_demo = df["is_demo"].iloc[0] if not df.empty else True
 # Initialize Dash App
 app = dash.Dash(
     __name__,
-    meta_tags=[{"name": "viewport", "content": "width-device-width, initial-scale=1"}],
+    meta_tags=[{"name": "viewport", "content": "width=device-width, initial-scale=1"}],
     title="Spatial Transcriptomics Market Intelligence",
 )
 

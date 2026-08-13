@@ -334,5 +334,5 @@ if __name__ == "__main__":
     else:
         reset_db()
 
-    pipeline_stage_1_and_2("2025-01-01", "2026-07-17")
+    pipeline_stage_1_and_2("2024-01-01", "2025-07-17")
     pipeline_stage_3_execution()

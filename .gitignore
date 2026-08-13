@@ -6,6 +6,7 @@
 # Local virtual environments
 venv/
 .venv/
+.venv-prod/
 
 # Local data and model artifacts
 data/

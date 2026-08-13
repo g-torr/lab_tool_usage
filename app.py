@@ -3,7 +3,6 @@ import logging
 
 import psycopg2
 import pandas as pd
-import numpy as np
 
 import dash
 from dash import dcc, html, Input, Output
@@ -12,40 +11,38 @@ import plotly.express as px
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-DATABASE_URL = os.getenv("DATABASE_URL")
 
+def get_db_connection():
+    """
+    Create PostgreSQL connection.
+    Raises an error immediately if DATABASE_URL is missing.
+    """
+    database_url = os.getenv("DATABASE_URL")
 
-DEMO_MACHINE_PARENTS = {
-    "NovaSeq X / 6000": "Illumina",
-    "Chromium Controller": "10x Genomics",
-    "Visium / Xenium": "10x Genomics",
-    "PromethION / P2 Solo": "Oxford Nanopore",
-    "Revio / Sequel IIe": "Pacific Biosciences",
-    "Orbitrap / Q Exactive": "Thermo Fisher",
-    "MERSCOPE": "Vizgen",
-    "Unresolved": "Unresolved",
-}
+    if not database_url:
+        raise ValueError("DATABASE_URL environment variable is not set.")
+
+    return psycopg2.connect(database_url)
 
 
 def normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Normalize expected dashboard columns and clean string values.
+    Clean and validate dataframe columns.
     """
-    if df.empty:
-        return pd.DataFrame(
-            columns=[
-                "year_month",
-                "resolved_machine",
-                "parent_company",
-                "mention_count",
-                "is_demo",
-            ]
-        )
-
     df = df.copy()
 
-    if "resolved_machine" not in df.columns:
-        df["resolved_machine"] = "Unresolved"
+    required_columns = [
+        "year_month",
+        "resolved_machine",
+        "mention_count",
+    ]
+
+    missing_columns = [col for col in required_columns if col not in df.columns]
+
+    if missing_columns:
+        raise KeyError(
+            f"Database query is missing required columns: {', '.join(missing_columns)}"
+        )
 
     if "parent_company" not in df.columns:
         df["parent_company"] = "Unresolved"
@@ -54,26 +51,25 @@ def normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         df[col] = df[col].fillna("Unresolved").astype(str).str.strip()
         df.loc[df[col].isin(["", "nan", "None"]), col] = "Unresolved"
 
-    if "mention_count" in df.columns:
-        df["mention_count"] = pd.to_numeric(df["mention_count"], errors="coerce").fillna(0).astype(int)
-    else:
-        df["mention_count"] = 0
+    df["mention_count"] = (
+        pd.to_numeric(df["mention_count"], errors="coerce")
+        .fillna(0)
+        .astype(int)
+    )
 
     return df
 
 
 def fetch_database_data():
     """
-    Fetch real market share data from PostgreSQL, including parent company.
-    Falls back to demo data if database is unavailable.
+    Fetch real market share data from PostgreSQL.
+
+    No demo fallback is used.
+    If there is no data, raise an error.
     """
-    if not DATABASE_URL:
-        logger.warning("DATABASE_URL not set. Falling back to synthetic demonstration dataset.")
-        return generate_demo_data()
+    conn = get_db_connection()
 
     try:
-        conn = psycopg2.connect(DATABASE_URL)
-
         query = """
             SELECT
                 SUBSTRING(c.date FROM 1 FOR 7) AS year_month,
@@ -96,91 +92,42 @@ def fetch_database_data():
         """
 
         df = pd.read_sql_query(query, conn)
-        conn.close()
-
-        if df.empty:
-            logger.warning("Database returned 0 records. Generating synthetic fallback dataset.")
-            return generate_demo_data()
-
-        df = normalize_dataframe(df)
-        df["is_demo"] = False
-        return df
 
     except Exception as e:
         logger.error(f"Failed to fetch data from PostgreSQL database: {e}")
-        return generate_demo_data()
+        raise RuntimeError(
+            f"Failed to fetch data from PostgreSQL database: {e}"
+        ) from e
+
+    finally:
+        conn.close()
+
+    if df.empty:
+        raise RuntimeError(
+            "Database returned no records. "
+            "The dashboard requires machine mention data to display results."
+        )
+
+    df = normalize_dataframe(df)
+    df["is_demo"] = False
+
+    return df
 
 
-def generate_demo_data():
-    """
-    Generate synthetic data for previewing dashboard layout when database is offline.
-    """
-    dates = pd.date_range(start="2024-01-01", end="2026-06-01", freq="MS").strftime("%Y-%m").tolist()
+# Fetch data.
+# If this fails, the app will raise an error instead of showing demo data.
+df = fetch_database_data()
 
-    records = []
-    np.random.seed(42)
-
-    for date in dates:
-        for machine, parent_company in DEMO_MACHINE_PARENTS.items():
-            count = int(np.random.poisson(lam=np.random.randint(5, 30)))
-            records.append(
-                {
-                    "year_month": date,
-                    "resolved_machine": machine,
-                    "parent_company": parent_company,
-                    "mention_count": count,
-                }
-            )
-
-    df = pd.DataFrame(records)
-    df["is_demo"] = True
-    return normalize_dataframe(df)
-
-
-def kpi_card(title: str, value: str, color: str):
-    return html.Div(
-        style={
-            "backgroundColor": "#1e293b",
-            "padding": "16px",
-            "borderRadius": "8px",
-            "border": "1px solid #334155",
-        },
-        children=[
-            html.P(
-                title,
-                style={
-                    "color": "#94a3b8",
-                    "margin": "0",
-                    "fontSize": "13px",
-                },
-            ),
-            html.H2(
-                value,
-                style={
-                    "fontSize": "24px",
-                    "fontWeight": "700",
-                    "margin": "4px 0 0 0",
-                    "color": color,
-                },
-            ),
-        ],
-    )
-
-
-def chart_card(graph_id: str):
-    return html.Div(
-        style={
-            "backgroundColor": "#1e293b",
-            "padding": "16px",
-            "borderRadius": "8px",
-            "border": "1px solid #334155",
-        },
-        children=[dcc.Graph(id=graph_id)],
-    )
+# Filter options
+all_machines = sorted(df["resolved_machine"].dropna().unique().tolist())
 
 
 def empty_figure(title: str):
+    """
+    Return an empty styled figure when filters produce no rows.
+    """
     fig = px.bar(template="plotly_dark", title=title)
+
     fig.update_layout(
         paper_bgcolor="#1e293b",
         plot_bgcolor="#1e293b",
@@ -188,27 +135,8 @@ def empty_figure(title: str):
         yaxis=dict(visible=False),
         margin=dict(l=20, r=20, t=50, b=20),
     )
+
     return fig
-
-
-# Fetch data
-df = fetch_database_data()
-
-is_demo = bool(df["is_demo"].iloc[0]) if not df.empty and "is_demo" in df.columns else True
-
-# Filter options
-all_machines = sorted(df["resolved_machine"].dropna().unique().tolist()) if not df.empty else []
-all_parent_companies = sorted(df["parent_company"].dropna().unique().tolist()) if not df.empty else []
-
-# KPI values
-total_mentions = f"{int(df['mention_count'].sum()):,}" if not df.empty else "0"
-unique_machine_models = f"{len(all_machines):,}"
-unique_parent_companies = f"{len(all_parent_companies):,}"
-
-if not df.empty:
-    time_range = f"{df['year_month'].min()} → {df['year_month'].max()}"
-else:
-    time_range = "N/A"
 
 
 # Initialize Dash App
@@ -264,10 +192,10 @@ app.layout = html.Div(
                 html.Div(
                     children=[
                         html.Span(
-                            "LIVE DATABASE" if not is_demo else "DEMO MODE (Set DATABASE_URL Secret)",
+                            "LIVE DATABASE",
                             style={
-                                "backgroundColor": "#166534" if not is_demo else "#9a3412",
-                                "color": "#f0fdf4" if not is_demo else "#ffedd5",
+                                "backgroundColor": "#166534",
+                                "color": "#f0fdf4",
                                 "padding": "6px 12px",
                                 "borderRadius": "16px",
                                 "fontSize": "12px",
@@ -288,10 +216,87 @@ app.layout = html.Div(
                 "marginBottom": "24px",
             },
             children=[
-                kpi_card("Total Machine Mentions", total_mentions, "#38bdf8"),
-                kpi_card("Unique Machine Models", unique_machine_models, "#4ade80"),
-                kpi_card("Unique Parent Companies", unique_parent_companies, "#c084fc"),
-                kpi_card("Time Range", time_range, "#facc15"),
+                html.Div(
+                    style={
+                        "backgroundColor": "#1e293b",
+                        "padding": "16px",
+                        "borderRadius": "8px",
+                        "border": "1px solid #334155",
+                    },
+                    children=[
+                        html.P(
+                            "Total Machine Mentions",
+                            style={
+                                "color": "#94a3b8",
+                                "margin": "0",
+                                "fontSize": "13px",
+                            },
+                        ),
+                        html.H2(
+                            f"{int(df['mention_count'].sum()):,}",
+                            style={
+                                "fontSize": "28px",
+                                "fontWeight": "700",
+                                "margin": "4px 0 0 0",
+                                "color": "#38bdf8",
+                            },
+                        ),
+                    ],
+                ),
+                html.Div(
+                    style={
+                        "backgroundColor": "#1e293b",
+                        "padding": "16px",
+                        "borderRadius": "8px",
+                        "border": "1px solid #334155",
+                    },
+                    children=[
+                        html.P(
+                            "Unique Machine Models",
+                            style={
+                                "color": "#94a3b8",
+                                "margin": "0",
+                                "fontSize": "13px",
+                            },
+                        ),
+                        html.H2(
+                            f"{len(all_machines):,}",
+                            style={
+                                "fontSize": "28px",
+                                "fontWeight": "700",
+                                "margin": "4px 0 0 0",
+                                "color": "#4ade80",
+                            },
+                        ),
+                    ],
+                ),
+                html.Div(
+                    style={
+                        "backgroundColor": "#1e293b",
+                        "padding": "16px",
+                        "borderRadius": "8px",
+                        "border": "1px solid #334155",
+                    },
+                    children=[
+                        html.P(
+                            "Time Range",
+                            style={
+                                "color": "#94a3b8",
+                                "margin": "0",
+                                "fontSize": "13px",
+                            },
+                        ),
+                        html.H2(
+                            f"{df['year_month'].min()} → {df['year_month'].max()}",
+                            style={
+                                "fontSize": "18px",
+                                "fontWeight": "700",
+                                "margin": "10px 0 0 0",
+                                "color": "#facc15",
+                            },
+                        ),
+                    ],
+                ),
             ],
         ),
 
@@ -310,6 +315,7 @@ app.layout = html.Div(
                         "display": "grid",
                         "gridTemplateColumns": "repeat(auto-fit, minmax(320px, 1fr))",
                         "gap": "16px",
+                        "alignItems": "end",
                     },
                     children=[
                         html.Div(
@@ -324,7 +330,10 @@ app.layout = html.Div(
                                 ),
                                 dcc.Dropdown(
                                     id="machine-filter",
-                                    options=[{"label": m, "value": m} for m in all_machines],
+                                    options=[
+                                        {"label": m, "value": m}
+                                        for m in all_machines
+                                    ],
                                     value=all_machines,
                                     multi=True,
                                     placeholder="Select machine models",
@@ -335,20 +344,27 @@ app.layout = html.Div(
                         html.Div(
                             children=[
                                 html.Label(
-                                    "Filter Parent Companies:",
+                                    "Aggregation View:",
                                     style={
                                         "fontWeight": "600",
                                         "marginBottom": "8px",
                                         "display": "block",
                                     },
                                 ),
-                                dcc.Dropdown(
-                                    id="parent-filter",
-                                    options=[{"label": p, "value": p} for p in all_parent_companies],
-                                    value=all_parent_companies,
-                                    multi=True,
-                                    placeholder="Select parent companies",
-                                    style={"color": "#0f172a"},
+                                html.Button(
+                                    "Switch to Parent Company View",
+                                    id="group-toggle-button",
+                                    n_clicks=0,
+                                    style={
+                                        "backgroundColor": "#38bdf8",
+                                        "color": "#0f172a",
+                                        "border": "none",
+                                        "padding": "10px 16px",
+                                        "borderRadius": "6px",
+                                        "fontWeight": "600",
+                                        "cursor": "pointer",
+                                        "width": "100%",
+                                    },
                                 ),
                             ]
                         ),
@@ -365,9 +381,24 @@ app.layout = html.Div(
                 "gap": "24px",
             },
             children=[
-                chart_card("market-share-chart"),
-                chart_card("mention-volume-chart"),
-                chart_card("parent-company-chart"),
+                html.Div(
+                    style={
+                        "backgroundColor": "#1e293b",
+                        "padding": "16px",
+                        "borderRadius": "8px",
+                        "border": "1px solid #334155",
+                    },
+                    children=[dcc.Graph(id="market-share-chart")],
+                ),
+                html.Div(
+                    style={
+                        "backgroundColor": "#1e293b",
+                        "padding": "16px",
+                        "borderRadius": "8px",
+                        "border": "1px solid #334155",
+                    },
+                    children=[dcc.Graph(id="mention-volume-chart")],
+                ),
             ],
         ),
     ],
@@ -378,52 +409,73 @@ app.layout = html.Div(
     [
         Output("market-share-chart", "figure"),
         Output("mention-volume-chart", "figure"),
-        Output("parent-company-chart", "figure"),
+        Output("group-toggle-button", "children"),
     ],
     [
         Input("machine-filter", "value"),
-        Input("parent-filter", "value"),
+        Input("group-toggle-button", "n_clicks"),
     ],
 )
-def update_charts(selected_machines, selected_parent_companies):
+def update_charts(selected_machines, n_clicks):
+    """
+    Toggle charts between:
+      - Tool view: resolved_machine
+      - Parent Company view: parent_company
+    """
     filtered_df = df.copy()
 
     if selected_machines:
-        filtered_df = filtered_df[filtered_df["resolved_machine"].isin(selected_machines)]
+        filtered_df = filtered_df[
+            filtered_df["resolved_machine"].isin(selected_machines)
+        ]
 
-    if selected_parent_companies:
-        filtered_df = filtered_df[filtered_df["parent_company"].isin(selected_parent_companies)]
+    use_parent_company = bool((n_clicks or 0) % 2)
+
+    if use_parent_company:
+        group_col = "parent_company"
+        view_name = "Parent Company"
+        button_label = "Switch to Tool View"
+    else:
+        group_col = "resolved_machine"
+        view_name = "Tool"
+        button_label = "Switch to Parent Company View"
 
     if filtered_df.empty:
         return (
             empty_figure("Market Share Trajectory Over Time"),
-            empty_figure("Total Mentions by Equipment Model"),
-            empty_figure("Total Mentions by Parent Company"),
+            empty_figure("Total Mentions"),
+            button_label,
         )
 
-    # Area Chart - Evolution over time
+    # Line / Area chart data
+    line_df = (
+        filtered_df.groupby(["year_month", group_col], as_index=False)["mention_count"]
+        .sum()
+        .sort_values(["year_month", group_col])
+    )
+
     fig_area = px.area(
-        filtered_df.sort_values("year_month"),
+        line_df,
         x="year_month",
         y="mention_count",
-        color="resolved_machine",
-        hover_data=["parent_company"],
-        title="Market Share Trajectory Over Time (Preprint Mentions)",
+        color=group_col,
+        title=f"Market Share Trajectory Over Time ({view_name} View)",
         template="plotly_dark",
         color_discrete_sequence=px.colors.qualitative.Pastel,
     )
+
     fig_area.update_layout(
         paper_bgcolor="#1e293b",
         plot_bgcolor="#1e293b",
         xaxis_title="Month",
         yaxis_title="Mentions",
-        legend_title="Machine Model",
+        legend_title=view_name,
         margin=dict(l=20, r=20, t=50, b=20),
     )
 
-    # Bar Chart - Machine-level cumulative breakdown, colored by parent company
+    # Bar chart data
     bar_df = (
-        filtered_df.groupby(["resolved_machine", "parent_company"], as_index=False)["mention_count"]
+        filtered_df.groupby(group_col, as_index=False)["mention_count"]
         .sum()
         .sort_values("mention_count", ascending=True)
     )
@@ -431,50 +483,32 @@ def update_charts(selected_machines, selected_parent_companies):
     fig_bar = px.bar(
         bar_df,
         x="mention_count",
-        y="resolved_machine",
+        y=group_col,
         orientation="h",
-        color="parent_company",
-        hover_data=["parent_company"],
-        title="Total Mentions by Equipment Model",
+        color=group_col,
+        title=f"Total Mentions by {view_name}",
         template="plotly_dark",
         color_discrete_sequence=px.colors.qualitative.Pastel,
     )
+
     fig_bar.update_layout(
         paper_bgcolor="#1e293b",
         plot_bgcolor="#1e293b",
         xaxis_title="Total Mention Count",
-        yaxis_title="Machine Model",
-        legend_title="Parent Company",
-        margin=dict(l=20, r=20, t=50, b=20),
-    )
-
-    # Bar Chart - Parent company cumulative breakdown
-    parent_df = (
-        filtered_df.groupby("parent_company", as_index=False)["mention_count"]
-        .sum()
-        .sort_values("mention_count", ascending=True)
-    )
-
-    fig_parent = px.bar(
-        parent_df,
-        x="mention_count",
-        y="parent_company",
-        orientation="h",
-        color="parent_company",
-        title="Total Mentions by Parent Company",
-        template="plotly_dark",
-        color_discrete_sequence=px.colors.qualitative.Pastel,
-    )
-    fig_parent.update_layout(
-        paper_bgcolor="#1e293b",
-        plot_bgcolor="#1e293b",
-        xaxis_title="Total Mention Count",
-        yaxis_title="Parent Company",
+        yaxis_title="Parent Company" if use_parent_company else "Tool / Machine Model",
         showlegend=False,
         margin=dict(l=20, r=20, t=50, b=20),
+        # Give every row enough vertical space so labels never get skipped
+        height=max(500, len(bar_df) * 28),
     )
 
-    return fig_area, fig_bar, fig_parent
+    # Force ALL category labels to be displayed (disables Plotly's auto label thinning)
+    fig_bar.update_yaxes(
+        tickmode="array",
+        tickvals=bar_df[group_col].tolist(),
+        ticktext=bar_df[group_col].tolist(),
+    )
+    return fig_area, fig_bar, button_label
 
 
 if __name__ == "__main__":

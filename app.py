@@ -32,7 +32,7 @@ def normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
 
     required_columns = [
-        "year_month",
+        "day",
         "resolved_machine",
         "mention_count",
     ]
@@ -57,6 +57,9 @@ def normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         .astype(int)
     )
 
+    # Ensure day is datetime
+    df["day"] = pd.to_datetime(df["day"])
+
     return df
 
 
@@ -72,23 +75,16 @@ def fetch_database_data():
     try:
         query = """
             SELECT
-                SUBSTRING(c.date FROM 1 FOR 7) AS year_month,
+                c.date AS day,
                 COALESCE(NULLIF(TRIM(m.resolved_machine), ''), 'Unresolved') AS resolved_machine,
                 COALESCE(NULLIF(TRIM(r.parent_company), ''), 'Unresolved') AS parent_company,
                 COUNT(*) AS mention_count
             FROM candidates c
-            JOIN machine_mentions m
-                ON c.doi = m.doi
-            LEFT JOIN registry_machines r
-                ON TRIM(r.canonical_name) = TRIM(m.resolved_machine)
+            JOIN machine_mentions m ON c.doi = m.doi
+            LEFT JOIN registry_machines r ON TRIM(r.canonical_name) = TRIM(m.resolved_machine)
             WHERE c.date IS NOT NULL
-            GROUP BY
-                SUBSTRING(c.date FROM 1 FOR 7),
-                COALESCE(NULLIF(TRIM(m.resolved_machine), ''), 'Unresolved'),
-                COALESCE(NULLIF(TRIM(r.parent_company), ''), 'Unresolved')
-            ORDER BY
-                year_month ASC,
-                mention_count DESC;
+            GROUP BY day, resolved_machine, parent_company
+            ORDER BY day ASC, mention_count DESC;
         """
 
         df = pd.read_sql_query(query, conn)
@@ -279,7 +275,7 @@ app.layout = html.Div(
                     },
                     children=[
                         html.P(
-                            "Time Range",
+                            "Date Range",
                             style={
                                 "color": "#94a3b8",
                                 "margin": "0",
@@ -287,7 +283,7 @@ app.layout = html.Div(
                             },
                         ),
                         html.H2(
-                            f"{df['year_month'].min()} → {df['year_month'].max()}",
+                            f"{df['day'].min().strftime('%Y-%m-%d')} → {df['day'].max().strftime('%Y-%m-%d')}",
                             style={
                                 "fontSize": "18px",
                                 "fontWeight": "700",
@@ -368,6 +364,27 @@ app.layout = html.Div(
                                 ),
                             ]
                         ),
+                        html.Div(
+                            children=[
+                                html.Label(
+                                    "Date Range:",
+                                    style={
+                                        "fontWeight": "600",
+                                        "marginBottom": "8px",
+                                        "display": "block",
+                                    },
+                                ),
+                                dcc.DatePickerRange(
+                                    id="date-range-picker",
+                                    min_date_allowed=df["day"].min().date(),
+                                    max_date_allowed=df["day"].max().date(),
+                                    start_date=df["day"].min().date(),
+                                    end_date=df["day"].max().date(),
+                                    display_format="YYYY-MM-DD",
+                                    style={"width": "100%"},
+                                ),
+                            ]
+                        ),
                     ],
                 )
             ],
@@ -414,19 +431,31 @@ app.layout = html.Div(
     [
         Input("machine-filter", "value"),
         Input("group-toggle-button", "n_clicks"),
+        Input("date-range-picker", "start_date"),
+        Input("date-range-picker", "end_date"),
     ],
 )
-def update_charts(selected_machines, n_clicks):
+def update_charts(selected_machines, n_clicks, start_date, end_date):
     """
     Toggle charts between:
       - Tool view: resolved_machine
       - Parent Company view: parent_company
+    Also filters by date range and applies 30-day rolling window.
     """
     filtered_df = df.copy()
 
+    # Filter by selected machines
     if selected_machines:
         filtered_df = filtered_df[
             filtered_df["resolved_machine"].isin(selected_machines)
+        ]
+
+    # Filter by date range
+    if start_date and end_date:
+        start_dt = pd.to_datetime(start_date)
+        end_dt = pd.to_datetime(end_date)
+        filtered_df = filtered_df[
+            (filtered_df["day"] >= start_dt) & (filtered_df["day"] <= end_dt)
         ]
 
     use_parent_company = bool((n_clicks or 0) % 2)
@@ -447,19 +476,49 @@ def update_charts(selected_machines, n_clicks):
             button_label,
         )
 
-    # Line / Area chart data
+    # Apply 30-day rolling window
+    # First, ensure we have a complete date range for each group
+    all_dates = pd.date_range(
+        start=filtered_df["day"].min(), end=filtered_df["day"].max(), freq="D"
+    )
+    date_grid = pd.DataFrame({"day": all_dates})
+    
+    # Create a complete grid of dates x groups
+    groups = filtered_df[group_col].unique()
+    grid = pd.MultiIndex.from_product([all_dates, groups], names=["day", group_col]).to_frame(
+        index=False
+    )
+    
+    # Merge with actual data
+    merged = pd.merge(
+        grid,
+        filtered_df,
+        on=["day", group_col],
+        how="left",
+    ).fillna({"mention_count": 0})
+    
+    # Sort by group and date for rolling calculation
+    merged = merged.sort_values([group_col, "day"])
+    
+    # Calculate 30-day rolling sum for each group
+    merged["rolling_mention_count"] = (
+        merged.groupby(group_col)["mention_count"]
+        .transform(lambda x: x.rolling(window=30, min_periods=1).sum())
+    )
+    
+    # Line / Area chart data (using rolling window)
     line_df = (
-        filtered_df.groupby(["year_month", group_col], as_index=False)["mention_count"]
-        .sum()
-        .sort_values(["year_month", group_col])
+        merged[["day", group_col, "rolling_mention_count"]]
+        .rename(columns={"rolling_mention_count": "mention_count"})
+        .sort_values(["day", group_col])
     )
 
     fig_area = px.area(
         line_df,
-        x="year_month",
+        x="day",
         y="mention_count",
         color=group_col,
-        title=f"Market Share Trajectory Over Time ({view_name} View)",
+        title=f"30-Day Rolling Market Share Trajectory ({view_name} View)",
         template="plotly_dark",
         color_discrete_sequence=px.colors.qualitative.Pastel,
     )
@@ -467,13 +526,13 @@ def update_charts(selected_machines, n_clicks):
     fig_area.update_layout(
         paper_bgcolor="#1e293b",
         plot_bgcolor="#1e293b",
-        xaxis_title="Month",
-        yaxis_title="Mentions",
+        xaxis_title="Date",
+        yaxis_title="Mentions (30-Day Rolling Sum)",
         legend_title=view_name,
         margin=dict(l=20, r=20, t=50, b=20),
     )
 
-    # Bar chart data
+    # Bar chart data (total mentions in selected period)
     bar_df = (
         filtered_df.groupby(group_col, as_index=False)["mention_count"]
         .sum()
@@ -486,7 +545,7 @@ def update_charts(selected_machines, n_clicks):
         y=group_col,
         orientation="h",
         color=group_col,
-        title=f"Total Mentions by {view_name}",
+        title=f"Total Mentions by {view_name} (Selected Period)",
         template="plotly_dark",
         color_discrete_sequence=px.colors.qualitative.Pastel,
     )

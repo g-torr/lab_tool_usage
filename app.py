@@ -1,42 +1,32 @@
-import os
 import logging
-
-import psycopg2
-import pandas as pd
+import os
 
 import dash
-from dash import dcc, html, Input, Output
+from dash import html
+import pandas as pd
 import plotly.express as px
+import psycopg2
+from dash import Input, Output, dcc
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
 def get_db_connection():
-    """
-    Create PostgreSQL connection.
+    """Create PostgreSQL connection.
+
     Raises an error immediately if DATABASE_URL is missing.
     """
     database_url = os.getenv("DATABASE_URL")
-
     if not database_url:
         raise ValueError("DATABASE_URL environment variable is not set.")
-
     return psycopg2.connect(database_url)
 
 
 def normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Clean and validate dataframe columns.
-    """
+    """Clean and validate dataframe columns."""
     df = df.copy()
-
-    required_columns = [
-        "day",
-        "resolved_machine",
-        "mention_count",
-    ]
-
+    required_columns = ["day", "resolved_machine", "mention_count"]
     missing_columns = [col for col in required_columns if col not in df.columns]
 
     if missing_columns:
@@ -56,25 +46,19 @@ def normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         .fillna(0)
         .astype(int)
     )
-
-    # Ensure day is datetime
     df["day"] = pd.to_datetime(df["day"])
-
     return df
 
 
 def fetch_database_data():
-    """
-    Fetch real market share data from PostgreSQL.
+    """Fetch real market share data from PostgreSQL.
 
-    No demo fallback is used.
-    If there is no data, raise an error.
+    No demo fallback is used. If there is no data, raise an error.
     """
     conn = get_db_connection()
-
     try:
         query = """
-            SELECT
+            SELECT 
                 c.date AS day,
                 COALESCE(NULLIF(TRIM(m.resolved_machine), ''), 'Unresolved') AS resolved_machine,
                 COALESCE(NULLIF(TRIM(r.parent_company), ''), 'Unresolved') AS parent_company,
@@ -83,47 +67,36 @@ def fetch_database_data():
             JOIN machine_mentions m ON c.doi = m.doi
             LEFT JOIN registry_machines r ON TRIM(r.canonical_name) = TRIM(m.resolved_machine)
             WHERE c.date IS NOT NULL
-            GROUP BY day, resolved_machine, parent_company
+            GROUP BY day, resolved_machine, r.parent_company
             ORDER BY day ASC, mention_count DESC;
         """
-
         df = pd.read_sql_query(query, conn)
-
     except Exception as e:
         logger.error(f"Failed to fetch data from PostgreSQL database: {e}")
         raise RuntimeError(
             f"Failed to fetch data from PostgreSQL database: {e}"
         ) from e
-
     finally:
         conn.close()
 
     if df.empty:
         raise RuntimeError(
-            "Database returned no records. "
-            "The dashboard requires machine mention data to display results."
+            "Database returned no records. The dashboard requires machine mention data to display results."
         )
 
     df = normalize_dataframe(df)
     df["is_demo"] = False
-
     return df
 
 
-# Fetch data.
-# If this fails, the app will raise an error instead of showing demo data.
+# Fetch data
 df = fetch_database_data()
-
-# Filter options
 all_machines = sorted(df["resolved_machine"].dropna().unique().tolist())
 
 
 def empty_figure(title: str):
-    """
-    Return an empty styled figure when filters produce no rows.
-    """
+    """Return an empty styled figure when filters produce no rows."""
     fig = px.bar(template="plotly_dark", title=title)
-
     fig.update_layout(
         paper_bgcolor="#1e293b",
         plot_bgcolor="#1e293b",
@@ -131,20 +104,18 @@ def empty_figure(title: str):
         yaxis=dict(visible=False),
         margin=dict(l=20, r=20, t=50, b=20),
     )
-
     return fig
 
 
 # Initialize Dash App
 app = dash.Dash(
     __name__,
-    meta_tags=[{"name": "viewport", "content": "width=device-width, initial-scale=1"}],
+    meta_tags=[
+        {"name": "viewport", "content": "width=device-width, initial-scale=1"}
+    ],
     title="Spatial Transcriptomics Market Intelligence",
 )
-
-# Expose WSGI server for Gunicorn on HF Spaces
 server = app.server
-
 
 app.layout = html.Div(
     style={
@@ -155,35 +126,42 @@ app.layout = html.Div(
         "padding": "24px",
     },
     children=[
-        # Header Banner
+        # Header Banner Fix
         html.Div(
             style={
                 "display": "flex",
-                "justifyContent": "space-between",
                 "alignItems": "center",
-                "borderBottom": "1px solid #334155",
-                "paddingBottom": "16px",
+                "gap": "16px",
                 "marginBottom": "24px",
             },
             children=[
                 html.Div(
+                    style={"flex": "1"},
                     children=[
                         html.H1(
                             "Spatial Transcriptomics & Genomics Market Intelligence",
                             style={
                                 "fontSize": "24px",
-                                "fontWeight": "700",
+                                "fontWeight": 700,
                                 "margin": "0 0 8px 0",
                             },
                         ),
                         html.P(
                             "Real-time equipment adoption & mention evolution extracted from bioRxiv preprints.",
-                            style={
-                                "color": "#94a3b8",
-                                "margin": "0",
-                            },
+                            style={"color": "#94a3b8", "margin": 0},
                         ),
-                    ]
+                    ],
+                ),
+                html.A(
+                    "Link to Repo",
+                    href="https://github.com/g-torr/lab_tool_usage",
+                    target="_blank",
+                    rel="noopener noreferrer",
+                    style={
+                        "color": "#94a3b8",
+                        "fontSize": "14px",
+                        "textDecoration": "none",
+                    },
                 ),
                 html.Div(
                     children=[
@@ -196,14 +174,14 @@ app.layout = html.Div(
                                 "borderRadius": "16px",
                                 "fontSize": "12px",
                                 "fontWeight": "600",
+                                "whiteSpace": "nowrap",
                             },
                         )
                     ]
                 ),
             ],
         ),
-
-        # KPI Cards
+        # KPI Cards Section
         html.Div(
             style={
                 "display": "grid",
@@ -261,41 +239,13 @@ app.layout = html.Div(
                                 "fontSize": "28px",
                                 "fontWeight": "700",
                                 "margin": "4px 0 0 0",
-                                "color": "#4ade80",
-                            },
-                        ),
-                    ],
-                ),
-                html.Div(
-                    style={
-                        "backgroundColor": "#1e293b",
-                        "padding": "16px",
-                        "borderRadius": "8px",
-                        "border": "1px solid #334155",
-                    },
-                    children=[
-                        html.P(
-                            "Date Range",
-                            style={
-                                "color": "#94a3b8",
-                                "margin": "0",
-                                "fontSize": "13px",
-                            },
-                        ),
-                        html.H2(
-                            f"{df['day'].min().strftime('%Y-%m-%d')} → {df['day'].max().strftime('%Y-%m-%d')}",
-                            style={
-                                "fontSize": "18px",
-                                "fontWeight": "700",
-                                "margin": "10px 0 0 0",
-                                "color": "#facc15",
+                                "color": "#38bdf8",
                             },
                         ),
                     ],
                 ),
             ],
         ),
-
         # Controls Bar
         html.Div(
             style={
@@ -381,7 +331,7 @@ app.layout = html.Div(
                                     start_date=df["day"].min().date(),
                                     end_date=df["day"].max().date(),
                                     display_format="YYYY-MM-DD",
-                                    style={"width": "100%"},
+                                    style={"width": "100%", "color": "#000000"},
                                 ),
                             ]
                         ),
@@ -417,10 +367,9 @@ app.layout = html.Div(
                     children=[dcc.Graph(id="mention-volume-chart")],
                 ),
             ],
-        ),
+        )
     ],
 )
-
 
 @app.callback(
     [

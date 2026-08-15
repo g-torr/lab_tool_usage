@@ -8,6 +8,7 @@ import logging
 import psycopg2
 import argparse
 import sys
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -41,6 +42,9 @@ BROAD_CATCHMENT = [
 EXCLUSION_TERMS = ["review", "perspective", "commentary", "meta-analysis", "systematic review", "benchmark", "re-analysis"]
 DRY_LAB_TRIGGERS = ["public database", "publicly available", "geo", "sra", "arrayexpress", "downloaded from", "re-analysis", "in silico"]
 
+INITIAL_SCAN_DATE = date(2024, 1, 1)
+SCAN_OVERLAP_DAYS = 1
+
 # ==========================================
 # DATABASE INITIALIZATION & RESET
 # ==========================================
@@ -71,6 +75,17 @@ def init_db():
             is_novel INTEGER DEFAULT 0
         )
     """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS ingestion_runs (
+            id BIGSERIAL PRIMARY KEY,
+            window_start DATE NOT NULL,
+            window_end DATE NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed')),
+            started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            completed_at TIMESTAMPTZ,
+            error TEXT
+        )
+    """)
     conn.commit()
     cursor.close()
     conn.close()
@@ -82,12 +97,61 @@ def reset_db():
     logger.info("Resetting PostgreSQL database tables...")
     cursor.execute("DROP TABLE IF EXISTS machine_mentions CASCADE;")
     cursor.execute("DROP TABLE IF EXISTS candidates CASCADE;")
+    cursor.execute("DROP TABLE IF EXISTS ingestion_runs CASCADE;")
     conn.commit()
     cursor.close()
     conn.close()
     init_db()
 
 # ==========================================
+def next_scan_window():
+    """Return the next scan window after the latest successful run."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT window_end
+        FROM ingestion_runs
+        WHERE status = 'completed'
+        ORDER BY window_end DESC, completed_at DESC
+        LIMIT 1
+    """)
+    row = cursor.fetchone()
+    cursor.close()
+    conn.close()
+
+    today = datetime.now(timezone.utc).date()
+    start = INITIAL_SCAN_DATE if row is None else row[0] - timedelta(days=SCAN_OVERLAP_DAYS)
+    return start, today
+
+def begin_ingestion_run(start, end):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO ingestion_runs (window_start, window_end, status)
+        VALUES (%s, %s, 'running')
+        RETURNING id
+    """, (start, end))
+    run_id = cursor.fetchone()[0]
+    conn.commit()
+    cursor.close()
+    conn.close()
+    return run_id
+
+def finish_ingestion_run(run_id, status, error=None):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE ingestion_runs
+        SET status = %s,
+            completed_at = CASE WHEN %s = 'completed' THEN NOW() ELSE completed_at END,
+            error = %s
+        WHERE id = %s
+    """, (status, status, error, run_id))
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+
 # STAGE 1 & 2: HARVESTING
 # ==========================================
 def pipeline_stage_1_and_2(start_date, end_date):
@@ -317,6 +381,16 @@ def build_parser():
         action='store_true',
         help='Append newly discovered papers to the existing database without clearing it first.',
     )
+    parser.add_argument(
+        '--start-date',
+        default=None,
+        help='Optional explicit first publication date (YYYY-MM-DD); otherwise use the database checkpoint.',
+    )
+    parser.add_argument(
+        '--end-date',
+        default=None,
+        help='Optional explicit last publication date (YYYY-MM-DD); otherwise use today and the database checkpoint.',
+    )
     return parser
 
 if __name__ == "__main__":
@@ -334,5 +408,26 @@ if __name__ == "__main__":
     else:
         reset_db()
 
-    pipeline_stage_1_and_2("2024-01-01", "2025-07-17")
-    pipeline_stage_3_execution()
+    if (args.start_date is None) != (args.end_date is None):
+        parser.error("--start-date and --end-date must be provided together")
+
+    if args.start_date is None:
+        scan_start, scan_end = next_scan_window()
+    else:
+        scan_start = date.fromisoformat(args.start_date)
+        scan_end = date.fromisoformat(args.end_date)
+
+    if scan_start > scan_end:
+        logger.info("No new scan window is available through today.")
+        raise SystemExit(0)
+
+    run_id = begin_ingestion_run(scan_start, scan_end)
+    try:
+        pipeline_stage_1_and_2(scan_start.isoformat(), scan_end.isoformat())
+        pipeline_stage_3_execution()
+    except Exception as exc:
+        finish_ingestion_run(run_id, "failed", str(exc))
+        logger.exception("Ingestion run %s failed; its window will be retried.", run_id)
+        raise
+    else:
+        finish_ingestion_run(run_id, "completed")

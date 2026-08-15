@@ -15,3 +15,5 @@ python-dotenv
 dash
 plotly
 gunicorn
+yfinance
+statsmodels

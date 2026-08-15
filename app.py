@@ -2,11 +2,13 @@ import logging
 import os
 
 import dash
-from dash import html
+from dash import dash_table, html
 import pandas as pd
 import plotly.express as px
 import psycopg2
-from dash import Input, Output, dcc
+from dash import Input, Output, callback_context, dcc
+
+from src.stock_signals import build_stock_signals
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -36,8 +38,10 @@ def normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
     if "parent_company" not in df.columns:
         df["parent_company"] = "Unresolved"
+    if "ticker" not in df.columns:
+        df["ticker"] = ""
 
-    for col in ["resolved_machine", "parent_company"]:
+    for col in ["resolved_machine", "parent_company", "ticker"]:
         df[col] = df[col].fillna("Unresolved").astype(str).str.strip()
         df.loc[df[col].isin(["", "nan", "None"]), col] = "Unresolved"
 
@@ -62,12 +66,13 @@ def fetch_database_data():
                 c.date AS day,
                 COALESCE(NULLIF(TRIM(m.resolved_machine), ''), 'Unresolved') AS resolved_machine,
                 COALESCE(NULLIF(TRIM(r.parent_company), ''), 'Unresolved') AS parent_company,
+                COALESCE(NULLIF(TRIM(r.ticker), ''), '') AS ticker,
                 COUNT(*) AS mention_count
             FROM candidates c
             JOIN machine_mentions m ON c.doi = m.doi
             LEFT JOIN registry_machines r ON TRIM(r.canonical_name) = TRIM(m.resolved_machine)
             WHERE c.date IS NOT NULL
-            GROUP BY day, resolved_machine, r.parent_company
+            GROUP BY day, resolved_machine, r.parent_company, r.ticker
             ORDER BY day ASC, mention_count DESC;
         """
         df = pd.read_sql_query(query, conn)
@@ -92,6 +97,7 @@ def fetch_database_data():
 # Fetch data
 df = fetch_database_data()
 all_machines = sorted(df["resolved_machine"].dropna().unique().tolist())
+all_companies = sorted(df["parent_company"].dropna().unique().tolist())
 
 
 def empty_figure(title: str):
@@ -267,7 +273,8 @@ app.layout = html.Div(
                         html.Div(
                             children=[
                                 html.Label(
-                                    "Filter Machine Models:",
+                                    "Filter Tool Models:",
+                                    id="machine-filter-label",
                                     style={
                                         "fontWeight": "600",
                                         "marginBottom": "8px",
@@ -366,6 +373,24 @@ app.layout = html.Div(
                     },
                     children=[dcc.Graph(id="mention-volume-chart")],
                 ),
+                html.Div(
+                    style={"backgroundColor": "#1e293b", "padding": "16px", "borderRadius": "8px", "border": "1px solid #334155"},
+                    children=[
+                        html.H3("Public-equity research signals", style={"marginTop": 0}),
+                        html.P("Evidence from equipment mentions only — not a buy recommendation. Signals exclude valuation, earnings, price, risk tolerance, and portfolio context.", style={"color": "#fbbf24", "fontSize": "13px"}),
+                        dash_table.DataTable(
+                            id="stock-signals-table",
+                            columns=[
+                                {"name": "Company", "id": "parent_company"}, {"name": "Ticker", "id": "ticker"},
+                                {"name": "Mentions", "id": "mentions"}, {"name": "Share", "id": "market_share", "type": "numeric", "format": {"specifier": ".1%"}},
+                                {"name": "Recent change", "id": "recent_change_pct", "type": "numeric", "format": {"specifier": "+.0f"}},
+                                {"name": "Signal", "id": "signal"}, {"name": "Why", "id": "rationale"},
+                            ], data=[], style_table={"overflowX": "auto"},
+                            style_header={"backgroundColor": "#334155", "fontWeight": "600"},
+                            style_cell={"backgroundColor": "#1e293b", "color": "#f8fafc", "padding": "10px", "textAlign": "left"},
+                        ),
+                    ],
+                ),
             ],
         )
     ],
@@ -376,6 +401,10 @@ app.layout = html.Div(
         Output("market-share-chart", "figure"),
         Output("mention-volume-chart", "figure"),
         Output("group-toggle-button", "children"),
+        Output("stock-signals-table", "data"),
+        Output("machine-filter", "options"),
+        Output("machine-filter", "value"),
+        Output("machine-filter-label", "children"),
     ],
     [
         Input("machine-filter", "value"),
@@ -391,13 +420,36 @@ def update_charts(selected_machines, n_clicks, start_date, end_date):
       - Parent Company view: parent_company
     Also filters by date range and applies 30-day rolling window.
     """
+    use_parent_company = bool((n_clicks or 0) % 2)
+    target_values = all_companies if use_parent_company else all_machines
+    target_options = [{"label": value, "value": value} for value in target_values]
+    filter_label = "Filter Parent Companies:" if use_parent_company else "Filter Tool Models:"
+
+    # The selector changes domain with the aggregation view. Translate the
+    # existing selection only when the toggle caused this callback; otherwise
+    # preserve the user's current selection in the active domain.
+    triggered_id = callback_context.triggered_id
+    if triggered_id == "group-toggle-button":
+        selected_machines = selected_machines or (all_machines if use_parent_company else all_companies)
+        if use_parent_company:
+            selected_machines = sorted(
+                df.loc[df["resolved_machine"].isin(selected_machines), "parent_company"]
+                .dropna().unique().tolist()
+            )
+        else:
+            selected_machines = sorted(
+                df.loc[df["parent_company"].isin(selected_machines), "resolved_machine"]
+                .dropna().unique().tolist()
+            )
+    else:
+        selected_machines = [value for value in (selected_machines or []) if value in target_values]
+
     filtered_df = df.copy()
 
-    # Filter by selected machines
+    # Filter by the active selector domain.
     if selected_machines:
-        filtered_df = filtered_df[
-            filtered_df["resolved_machine"].isin(selected_machines)
-        ]
+        filter_column = "parent_company" if use_parent_company else "resolved_machine"
+        filtered_df = filtered_df[filtered_df[filter_column].isin(selected_machines)]
 
     # Filter by date range
     if start_date and end_date:
@@ -406,8 +458,6 @@ def update_charts(selected_machines, n_clicks, start_date, end_date):
         filtered_df = filtered_df[
             (filtered_df["day"] >= start_dt) & (filtered_df["day"] <= end_dt)
         ]
-
-    use_parent_company = bool((n_clicks or 0) % 2)
 
     if use_parent_company:
         group_col = "parent_company"
@@ -423,6 +473,10 @@ def update_charts(selected_machines, n_clicks, start_date, end_date):
             empty_figure("Market Share Trajectory Over Time"),
             empty_figure("Total Mentions"),
             button_label,
+            [],
+            target_options,
+            selected_machines,
+            filter_label,
         )
 
     # Apply 30-day rolling window
@@ -462,12 +516,14 @@ def update_charts(selected_machines, n_clicks, start_date, end_date):
         .sort_values(["day", group_col])
     )
 
-    fig_area = px.area(
+    # Use independent lines rather than a stacked area chart. Stacking can
+    # make one company's boundary rise when another company's mentions fall.
+    fig_area = px.line(
         line_df,
         x="day",
         y="mention_count",
         color=group_col,
-        title=f"30-Day Rolling Market Share Trajectory ({view_name} View)",
+        title=f"30-Day Rolling Mention Trend ({view_name} View)",
         template="plotly_dark",
         color_discrete_sequence=px.colors.qualitative.Pastel,
     )
@@ -516,7 +572,16 @@ def update_charts(selected_machines, n_clicks, start_date, end_date):
         tickvals=bar_df[group_col].tolist(),
         ticktext=bar_df[group_col].tolist(),
     )
-    return fig_area, fig_bar, button_label
+    signals = build_stock_signals(filtered_df)
+    return (
+        fig_area,
+        fig_bar,
+        button_label,
+        signals.to_dict("records"),
+        target_options,
+        selected_machines,
+        filter_label,
+    )
 
 
 if __name__ == "__main__":

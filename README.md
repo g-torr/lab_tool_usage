@@ -5,8 +5,8 @@ This project tracks the usage of laboratory equipment in scientific literature b
 ## Features
 
 - **Automated Harvesting**: Fetches recent preprints from bioRxiv/medRxiv in specified categories.
-- **Novelty Classification**: Uses local zero-shot classifiers (with LLM fallback) to identify novel wet-lab work.
-- **Machine Extraction**: Hybrid approach (rule-based + LLM) to extract equipment mentions from methods sections.
+- **Novelty Classification**: Uses local zero-shot classifiers to identify novel wet-lab work.
+- **Machine Extraction**: Rule-based approach to extract equipment mentions from methods sections.
 - **Semantic Resolution**: Resolves raw machine names to canonical entities using a gazetteer and fuzzy matching.
 - **PostgreSQL Storage**: Stores candidates, mentions, and metadata in a remote PostgreSQL database.
 - **Interactive Dashboard**: Visualizes equipment adoption trends over time with filtering capabilities.
@@ -61,8 +61,6 @@ The pipeline consists of three main stages:
    Create a `.env` file in the root directory with:
    ```env
    DATABASE_URL=your_postgresql_connection_string
-   OPENROUTER_API_KEY=your_openrouter_key  # For LLM fallback
-   HUGGING_FACEHUB_API_KEY=your_huggingface_key  # For local models
    ```
 
    You can also use the provided `.env.example` as a template.
@@ -136,17 +134,9 @@ Adjust `DRY_LAB_TRIGGERS` to better identify computational-only work.
 
 ## Deployment
 
-### Hugging Face Spaces
-
-This project is configured to run on Hugging Face Spaces. The `app.py` file exposes a WSGI-compatible server object (`server = app.server`) for use with Gunicorn.
-
-To deploy to Hugging Face Spaces:
-1. Create a new Space (Gradio or Docker)
-2. Push your code to the Space's repository
-3. Set the required secrets (DATABASE_URL, API keys)
-4. The space will automatically detect and use the WSGI server
-
 ### Render.com / Other Platforms
+
+The dashboard is hosted at https://lab-tool-usage.onrender.com/
 
 Use the following start command:
 ```bash
@@ -182,15 +172,14 @@ lab_tool_usage/
 │   ├── stage2_labels.json
 │   └── unmatched.csv
 ├── db/                     # Database schemas (gitignored)
-�└── openrouter/             # LLM integration (gitignored)
 ```
 
 ## How It Works
 
 1. **Harvesting**: The pipeline queries bioRxiv/medRxiv for recent preprints in biomedical categories.
 2. **Filtering**: Preprints are filtered for equipment-related keywords in title/abstract.
-3. **Novelty Check**: Novel wet-lab work is identified using a local zero-shot classifier (with LLM fallback).
-4. **Extraction**: Equipment mentions are extracted from methods sections using a hybrid approach.
+3. **Novelty Check**: Novel wet-lab work is identified using a local zero-shot classifier.
+4. **Extraction**: Equipment mentions are extracted from methods sections using a rule-based approach.
 5. **Resolution**: Raw mentions are matched to known equipment entities using fuzzy matching and a gazetteer.
 6. **Storage**: Results are stored in PostgreSQL for analysis and visualization.
 7. **Visualization**: The dashboard shows temporal trends and breakdowns of equipment usage.

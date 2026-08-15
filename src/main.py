@@ -42,7 +42,7 @@ BROAD_CATCHMENT = [
 EXCLUSION_TERMS = ["review", "perspective", "commentary", "meta-analysis", "systematic review", "benchmark", "re-analysis"]
 DRY_LAB_TRIGGERS = ["public database", "publicly available", "geo", "sra", "arrayexpress", "downloaded from", "re-analysis", "in silico"]
 
-INITIAL_SCAN_DATE = date(2024, 1, 1)
+INITIAL_SCAN_DATE = date(2023, 1, 1)
 SCAN_OVERLAP_DAYS = 1
 
 # ==========================================

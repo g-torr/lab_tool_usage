@@ -44,6 +44,7 @@ DRY_LAB_TRIGGERS = ["public database", "publicly available", "geo", "sra", "arra
 
 INITIAL_SCAN_DATE = date(2023, 1, 1)
 SCAN_OVERLAP_DAYS = 1
+MAX_SCAN_DAYS = 7
 
 # ==========================================
 # DATABASE INITIALIZATION & RESET
@@ -121,7 +122,8 @@ def next_scan_window():
 
     today = datetime.now(timezone.utc).date()
     start = INITIAL_SCAN_DATE if row is None else row[0] - timedelta(days=SCAN_OVERLAP_DAYS)
-    return start, today
+    end = min(start + timedelta(days=MAX_SCAN_DAYS - 1), today)
+    return start, end
 
 def begin_ingestion_run(start, end):
     conn = get_db_connection()
@@ -159,7 +161,7 @@ def pipeline_stage_1_and_2(start_date, end_date):
     conn = get_db_connection()
     cursor = conn.cursor()
     session = requests.Session()
-    retries = Retry(total=5, backoff_factor=1, status_forcelist=[502, 503, 504])
+    retries = Retry(total=5, backoff_factor=2, status_forcelist=[429, 500, 502, 503, 504], respect_retry_after_header=True)
     session.mount('https://', HTTPAdapter(max_retries=retries))
     cursor_idx = 0
     
@@ -169,9 +171,12 @@ def pipeline_stage_1_and_2(start_date, end_date):
         try:
             response = session.get(url, timeout=30)
             if response.status_code != 200:
-                cursor_idx += 100
-                continue
-            data = response.json()
+                raise RuntimeError(f"bioRxiv API returned HTTP {response.status_code} for {url}")
+            try:
+                data = response.json()
+            except ValueError as exc:
+                content_type = response.headers.get("Content-Type", "unknown")
+                raise RuntimeError(f"bioRxiv API returned non-JSON data (content-type: {content_type}) for {url}") from exc
             papers = data.get("collection", [])
             if not papers: break
             
@@ -195,12 +200,11 @@ def pipeline_stage_1_and_2(start_date, end_date):
                 """, batch_candidates)
                 conn.commit()
                 logger.info(f"   Saved {len(batch_candidates)} candidates.")
-            cursor_idx += 100
+            cursor_idx += 30
             time.sleep(0.4)
-        except Exception as e:
-            logger.error(f"Exception at {cursor_idx}: {e}")
-            cursor_idx += 100
-            continue
+        except Exception:
+            logger.exception(f"Harvest failed at cursor {cursor_idx}; aborting this scan window")
+            raise
             
     cursor.close()
     conn.close()
@@ -271,11 +275,9 @@ def fetch_methods_text_from_web(doi):
                 logger.warning(f"Page fetched from {base_url}, but no valid Method boundaries were found in DOM.")
             else:
                 logger.warning(f"Failed to fetch {web_url} - Status: {response.status_code}")
-                
         except Exception as e:
             logger.error(f"Exception occurred while fetching {web_url}: {e}")
             continue
-            
     return None
 
 # ==========================================
@@ -411,23 +413,29 @@ if __name__ == "__main__":
     if (args.start_date is None) != (args.end_date is None):
         parser.error("--start-date and --end-date must be provided together")
 
-    if args.start_date is None:
-        scan_start, scan_end = next_scan_window()
-    else:
+    explicit_window = args.start_date is not None
+    if explicit_window:
         scan_start = date.fromisoformat(args.start_date)
         scan_end = date.fromisoformat(args.end_date)
 
-    if scan_start > scan_end:
-        logger.info("No new scan window is available through today.")
-        raise SystemExit(0)
+    while True:
+        if not explicit_window:
+            scan_start, scan_end = next_scan_window()
 
-    run_id = begin_ingestion_run(scan_start, scan_end)
-    try:
-        pipeline_stage_1_and_2(scan_start.isoformat(), scan_end.isoformat())
-        pipeline_stage_3_execution()
-    except Exception as exc:
-        finish_ingestion_run(run_id, "failed", str(exc))
-        logger.exception("Ingestion run %s failed; its window will be retried.", run_id)
-        raise
-    else:
-        finish_ingestion_run(run_id, "completed")
+        if scan_start > scan_end:
+            logger.info("No new scan window is available through today.")
+            break
+
+        run_id = begin_ingestion_run(scan_start, scan_end)
+        try:
+            pipeline_stage_1_and_2(scan_start.isoformat(), scan_end.isoformat())
+            pipeline_stage_3_execution()
+        except Exception as exc:
+            finish_ingestion_run(run_id, "failed", str(exc))
+            logger.exception("Ingestion run %s failed; its window will be retried.", run_id)
+            raise
+        else:
+            finish_ingestion_run(run_id, "completed")
+
+        if explicit_window or scan_end >= datetime.now(timezone.utc).date():
+            break

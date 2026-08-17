@@ -60,9 +60,11 @@ def init_db():
             category TEXT,
             date TEXT,
             abstract TEXT,
+            server TEXT DEFAULT 'biorxiv',
             processed INTEGER DEFAULT 0
         )
     """)
+    cursor.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS server TEXT DEFAULT 'biorxiv'")
     
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS machine_mentions (
@@ -190,12 +192,12 @@ def pipeline_stage_1_and_2(start_date, end_date):
                     
                     if any(term in title or term in abstract for term in EXCLUSION_TERMS): continue
                     if any(word in abstract or word in title for word in BROAD_CATCHMENT):
-                        batch_candidates.append((doi, paper.get("title"), paper_category, paper.get("date"), paper.get("abstract")))
+                        batch_candidates.append((doi, paper.get("title"), paper_category, paper.get("date"), paper.get("abstract"), paper.get("server", "biorxiv").lower()))
             
             if batch_candidates:
                 cursor.executemany("""
-                    INSERT INTO candidates (doi, title, category, date, abstract)
-                    VALUES (%s, %s, %s, %s, %s)
+                    INSERT INTO candidates (doi, title, category, date, abstract, server)
+                    VALUES (%s, %s, %s, %s, %s, %s)
                     ON CONFLICT (doi) DO NOTHING
                 """, batch_candidates)
                 conn.commit()
@@ -212,72 +214,75 @@ def pipeline_stage_1_and_2(start_date, end_date):
 # ==========================================
 # WEB SCRAPER
 # ==========================================
-def fetch_methods_text_from_web(doi):
+def fetch_methods_text_from_web(doi, server="biorxiv"):
     session = requests.Session()
     retries = Retry(
-        total=5, 
+        total=5,
         backoff_factor=2,
-        status_forcelist=[500, 502, 503, 504],
-        raise_on_status=False
+        status_forcelist=[429, 500, 502, 503, 504],
+        raise_on_status=False,
+        respect_retry_after_header=True,
     )
-    session.mount('https://', HTTPAdapter(max_retries=retries))
-    
+    session.mount("https://", HTTPAdapter(max_retries=retries))
+
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.5"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
     }
-    
-    heading_weights = {'h1': 1, 'h2': 2, 'h3': 3, 'h4': 4}
+
+    base_domain = {
+        "biorxiv": "https://www.biorxiv.org/content",
+        "medrxiv": "https://www.medrxiv.org/content",
+    }.get((server or "").lower())
+    if not base_domain:
+        logger.warning("Unknown preprint server %r for %s; skipping.", server, doi)
+        return None
+
+    web_url = f"{base_domain}/{doi}.full"
+    heading_weights = {"h1": 1, "h2": 2, "h3": 3, "h4": 4}
     stop_terms = ["reference", "acknowledgement", "conflict of interest", "funding", "author contribution"]
-    base_domains = ["https://www.biorxiv.org/content", "https://www.medrxiv.org/content"]
-    
-    for base_url in base_domains:
-        web_url = f"{base_url}/{doi}.full"
-        try:
+
+    try:
+        response = session.get(web_url, headers=headers, timeout=30)
+        logger.info(f"Fetching URL: {web_url} - Status Code: {response.status_code}")
+
+        if response.status_code == 429:
+            retry_after = int(response.headers.get("Retry-After", 10))
+            logger.warning(f"Rate limited (429). Sleeping for {retry_after} seconds...")
+            time.sleep(retry_after)
             response = session.get(web_url, headers=headers, timeout=30)
-            logger.info(f"Fetching URL: {web_url} - Status Code: {response.status_code}")
-            
-            if response.status_code == 429:
-                retry_after = int(response.headers.get("Retry-After", 10))
-                logger.warning(f"Rate limited (429). Sleeping for {retry_after} seconds...")
-                time.sleep(retry_after)
-                response = session.get(web_url, headers=headers, timeout=30)
-                
-            if response.status_code == 200:
-                soup = BeautifulSoup(response.text, 'html.parser')
-                headings = soup.find_all(['h1', 'h2', 'h3', 'h4'])
-                
-                for h in headings:
-                    heading_text = h.get_text(strip=True).lower()
-                    if "method" in heading_text or "materials and methods" in heading_text:
-                        target_tag = h.name
-                        target_weight = heading_weights[target_tag]
-                        
-                        fragments = []
-                        for sibling in h.find_next_siblings():
-                            if sibling.name in heading_weights:
-                                sibling_text = sibling.get_text(strip=True).lower()
-                                sibling_weight = heading_weights[sibling.name]
-                                
-                                if sibling_weight <= target_weight:
-                                    break
-                                if any(term in sibling_text for term in stop_terms):
-                                    break
-                            
-                            fragments.append(sibling.get_text(separator=' ', strip=True))
-                        
-                        combined_text = " ".join(fragments).strip().lower()
-                        if len(combined_text) > 200:
-                            logger.info(f"Method section successfully extracted from {base_url}.")
-                            return combined_text
-                
-                logger.warning(f"Page fetched from {base_url}, but no valid Method boundaries were found in DOM.")
-            else:
-                logger.warning(f"Failed to fetch {web_url} - Status: {response.status_code}")
-        except Exception as e:
-            logger.error(f"Exception occurred while fetching {web_url}: {e}")
-            continue
+
+        if response.status_code != 200:
+            logger.warning(f"Failed to fetch {web_url} - Status: {response.status_code}")
+            return None
+
+        soup = BeautifulSoup(response.text, "html.parser")
+        headings = soup.find_all(["h1", "h2", "h3", "h4"])
+        for heading in headings:
+            heading_text = heading.get_text(" ", strip=True).lower()
+            if "method" not in heading_text:
+                continue
+
+            target_weight = heading_weights[heading.name]
+            fragments = []
+            for sibling in heading.find_next_siblings():
+                if sibling.name in heading_weights:
+                    sibling_text = sibling.get_text(" ", strip=True).lower()
+                    if heading_weights[sibling.name] <= target_weight:
+                        break
+                    if any(term in sibling_text for term in stop_terms):
+                        break
+                fragments.append(sibling.get_text(" ", strip=True))
+
+            combined_text = " ".join(fragments).strip().lower()
+            if len(combined_text) > 200:
+                logger.info(f"Method section successfully extracted from {base_domain}.")
+                return combined_text
+
+        logger.warning(f"Page fetched from {base_domain}, but no valid Method boundaries were found in DOM.")
+    except Exception as e:
+        logger.error(f"Exception occurred while fetching {web_url}: {e}")
     return None
 
 # ==========================================
@@ -302,16 +307,16 @@ def pipeline_stage_3_execution():
     print("Initializing Semantic Machine Resolver...")
     resolver = SemanticMachineResolver()
     
-    cursor.execute("SELECT doi, abstract FROM candidates WHERE processed = 0")
+    cursor.execute("SELECT doi, abstract, server FROM candidates WHERE processed = 0")
     unprocessed = cursor.fetchall()
     print(f"Found {len(unprocessed)} unprocessed candidates.")
     
-    for doi, abstract in unprocessed:
+    for doi, abstract, server in unprocessed:
         print(f"\n{'='*70}")
         print(f"Processing: {doi}")
         print(f"{'='*70}")
         
-        methods_text = fetch_methods_text_from_web(doi)
+        methods_text = fetch_methods_text_from_web(doi, server)
         time.sleep(1.0)
         
         if not methods_text:

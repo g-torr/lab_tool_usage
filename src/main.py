@@ -240,7 +240,7 @@ def fetch_methods_text_from_web(doi, server="biorxiv"):
         return None
 
     web_url = f"{base_domain}/{doi}.full"
-    heading_weights = {"h1": 1, "h2": 2, "h3": 3, "h4": 4}
+    heading_weights = {f"h{i}": i for i in range(1, 7)}
     stop_terms = ["reference", "acknowledgement", "conflict of interest", "funding", "author contribution"]
 
     try:
@@ -258,13 +258,19 @@ def fetch_methods_text_from_web(doi, server="biorxiv"):
             return None
 
         soup = BeautifulSoup(response.text, "html.parser")
-        headings = soup.find_all(["h1", "h2", "h3", "h4"])
+        headings = soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6"])
+        headings += soup.select(".section-title, .section__title, .article-section-title")
+        seen = set()
         for heading in headings:
+            if id(heading) in seen:
+                continue
+            seen.add(id(heading))
             heading_text = heading.get_text(" ", strip=True).lower()
-            if "method" not in heading_text:
+            normalized_heading = " ".join(heading_text.split())
+            if not any(term in normalized_heading for term in ("materials and methods", "methods", "methodology", "experimental procedures")):
                 continue
 
-            target_weight = heading_weights[heading.name]
+            target_weight = heading_weights.get(heading.name, 2)
             fragments = []
             for sibling in heading.find_next_siblings():
                 if sibling.name in heading_weights:
@@ -276,6 +282,12 @@ def fetch_methods_text_from_web(doi, server="biorxiv"):
                 fragments.append(sibling.get_text(" ", strip=True))
 
             combined_text = " ".join(fragments).strip().lower()
+            if len(combined_text) <= 200:
+                container = next((parent for parent in heading.parents
+                                  if "section" in " ".join(parent.get("class", [])).lower()
+                                  and parent.name not in {"body", "html"}), heading.parent)
+                container_text = container.get_text(" ", strip=True)
+                combined_text = container_text.replace(heading.get_text(" ", strip=True), "", 1).strip().lower()
             if len(combined_text) > 200:
                 logger.info(f"Method section successfully extracted from {base_domain}.")
                 return combined_text

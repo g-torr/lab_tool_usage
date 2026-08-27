@@ -456,7 +456,18 @@ app.layout = html.Div(
                             html.P("Mean IC is the average daily Spearman correlation between signal strength and future returns (from -1 to +1). ICIR is Mean IC divided by its variability, while IC t-stat measures how reliably the average differs from zero. Regression n is the number of ticker observations; IC dates is the number of dates used for the correlation.", style={"margin": "6px 0", "fontSize": "13px"}),
                             html.P("Treat small samples, noisy estimates, missing prices, transaction costs, and multiple testing as important limitations. These figures show association, not proof that the signal can be traded profitably.", style={"margin": "6px 0", "fontSize": "13px", "color": "#fbbf24"}),
                         ]),
-                        html.Button("Run alpha analysis", id="run-alpha-button", n_clicks=0, style={"backgroundColor": "#38bdf8", "color": "#0f172a", "border": "none", "padding": "10px 16px", "borderRadius": "6px", "fontWeight": "600", "cursor": "pointer"}),
+                        html.H4("Company research signal", style={"marginBottom": "6px"}),
+                        html.P("This is the company-level screen behind the analysis: Positive research signal means at least 5 mentions in the recent 90 days and at least 10% growth versus the preceding 90 days; Watch means at least 3 recent mentions; Insufficient evidence means there is not enough recent mention volume. It is evidence about research adoption, not a buy or sell recommendation.", style={"color": "#94a3b8", "fontSize": "13px"}),
+                        dash_table.DataTable(
+                            id="alpha-company-signals-table", data=[],
+                            columns=[
+                                {"name": "Company", "id": "parent_company"}, {"name": "Ticker", "id": "ticker"},
+                                {"name": "Recent mentions", "id": "mentions"}, {"name": "Recent share", "id": "market_share", "type": "numeric", "format": {"specifier": ".1%"}},
+                                {"name": "Change vs prior 90d (%)", "id": "recent_change_pct", "type": "numeric", "format": {"specifier": "+.0f"}}, {"name": "Signal", "id": "signal"}, {"name": "Why", "id": "rationale"},
+                            ], style_table={"overflowX": "auto"}, style_header={"backgroundColor": "#334155", "fontWeight": "600"},
+                            style_cell={"backgroundColor": "#1e293b", "color": "#f8fafc", "padding": "10px", "textAlign": "left"},
+                        ),
+                        html.Button("Run alpha analysis", id="run-alpha-button", n_clicks=0, style={"backgroundColor": "#38bdf8", "color": "#0f172a", "border": "none", "padding": "10px 16px", "borderRadius": "6px", "fontWeight": "600", "cursor": "pointer", "marginTop": "16px"}),
                         html.Div(id="alpha-status", style={"margin": "16px 0", "color": "#94a3b8"}),
                         dcc.Graph(id="alpha-metrics-chart"),
                         dash_table.DataTable(
@@ -473,7 +484,7 @@ app.layout = html.Div(
 )
 
 @app.callback(
-    [Output("alpha-metrics-chart", "figure"), Output("alpha-results-table", "data"), Output("alpha-status", "children")],
+    [Output("alpha-metrics-chart", "figure"), Output("alpha-results-table", "data"), Output("alpha-company-signals-table", "data"), Output("alpha-status", "children")],
     Input("run-alpha-button", "n_clicks"),
     prevent_initial_call=True,
 )
@@ -483,10 +494,11 @@ def update_alpha_analysis(n_clicks):
         chart_data = results[["Horizon", "Mean IC"]].dropna()
         fig = px.bar(chart_data, x="Horizon", y="Mean IC", title="Mean Information Coefficient by Horizon", template="plotly_dark", color="Horizon")
         fig.update_layout(paper_bgcolor="#1e293b", plot_bgcolor="#1e293b", margin=dict(l=20, r=20, t=50, b=20), showlegend=False)
-        return fig, results.replace({pd.NA: None}).to_dict("records"), f"Analysis complete across {len(results)} horizons."
+        company_signals = build_stock_signals(df)
+        return fig, results.replace({pd.NA: None}).to_dict("records"), company_signals.to_dict("records"), f"Analysis complete across {len(results)} horizons."
     except Exception as exc:
         logger.exception("Alpha analysis failed")
-        return empty_figure("Alpha analysis unavailable"), [], f"Alpha analysis unavailable: {exc}"
+        return empty_figure("Alpha analysis unavailable"), [], [], f"Alpha analysis unavailable: {exc}"
 
 @app.callback(
     [

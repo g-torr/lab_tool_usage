@@ -450,6 +450,12 @@ app.layout = html.Div(
                     html.Div(style={"padding": "24px 0"}, children=[
                         html.H2("Alpha signal analysis", style={"marginTop": 0}),
                         html.P("Tests whether equipment-mention strength is associated with subsequent stock returns. Signals enter at the next close; this is research, not investment advice.", style={"color": "#94a3b8"}),
+                        html.Div(style={"backgroundColor": "#172554", "border": "1px solid #1e40af", "padding": "14px 16px", "borderRadius": "6px", "marginBottom": "16px"}, children=[
+                            html.H4("How to read the results", style={"margin": "0 0 8px 0"}),
+                            html.P("Beta measures the change in forward log return associated with a one-unit increase in the mention signal, after controlling for prior 12-month return and ticker. Positive beta means stronger mention signals were associated with higher subsequent returns; p-value below 0.05 is a conventional, not definitive, significance threshold.", style={"margin": "6px 0", "fontSize": "13px"}),
+                            html.P("Mean IC is the average daily Spearman correlation between signal strength and future returns (from -1 to +1). ICIR is Mean IC divided by its variability, while IC t-stat measures how reliably the average differs from zero. Regression n is the number of ticker observations; IC dates is the number of dates used for the correlation.", style={"margin": "6px 0", "fontSize": "13px"}),
+                            html.P("Treat small samples, noisy estimates, missing prices, transaction costs, and multiple testing as important limitations. These figures show association, not proof that the signal can be traded profitably.", style={"margin": "6px 0", "fontSize": "13px", "color": "#fbbf24"}),
+                        ]),
                         html.Button("Run alpha analysis", id="run-alpha-button", n_clicks=0, style={"backgroundColor": "#38bdf8", "color": "#0f172a", "border": "none", "padding": "10px 16px", "borderRadius": "6px", "fontWeight": "600", "cursor": "pointer"}),
                         html.Div(id="alpha-status", style={"margin": "16px 0", "color": "#94a3b8"}),
                         dcc.Graph(id="alpha-metrics-chart"),

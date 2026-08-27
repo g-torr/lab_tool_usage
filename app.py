@@ -9,6 +9,10 @@ import psycopg2
 from dash import Input, Output, callback_context, dcc
 
 from src.stock_signals import build_stock_signals
+from src.alpha_backtest import (
+    HORIZONS, PURITY, attach_returns, build_signal_panel, fetch_prices,
+    test1_panel_regression, test2_information_coefficient, to_weekly,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -92,6 +96,49 @@ def fetch_database_data():
     df = normalize_dataframe(df)
     df["is_demo"] = False
     return df
+
+
+def fetch_alpha_mention_panel():
+    """Fetch daily ticker-level mention counts for the alpha analysis."""
+    conn = get_db_connection()
+    try:
+        query = """
+            SELECT c.date AS day,
+                   COALESCE(NULLIF(TRIM(r.ticker), ''), 'Unresolved') AS ticker,
+                   COUNT(*) AS mention_count,
+                   COUNT(DISTINCT c.doi) AS doi_count
+            FROM candidates c
+            JOIN machine_mentions m ON c.doi = m.doi
+            LEFT JOIN registry_machines r
+              ON TRIM(r.canonical_name) = TRIM(m.resolved_machine)
+            WHERE c.date IS NOT NULL
+            GROUP BY c.date, r.ticker
+            ORDER BY c.date ASC
+        """
+        return pd.read_sql_query(query, conn)
+    finally:
+        conn.close()
+
+
+def run_alpha_analysis():
+    """Run the registered mention-signal backtest for dashboard display."""
+    mentions = fetch_alpha_mention_panel()
+    if mentions.empty:
+        raise RuntimeError("No ticker-level mention data is available.")
+    weekly = to_weekly(build_signal_panel(mentions))
+    tickers = [ticker for ticker in weekly["ticker"].dropna().unique() if ticker in PURITY]
+    if not tickers:
+        raise RuntimeError("No listed-company signals are available.")
+    prices = fetch_prices(tickers, "2023-12-01", pd.Timestamp.utcnow().strftime("%Y-%m-%d"))
+    panel = attach_returns(weekly, prices)
+    rows = []
+    for horizon in HORIZONS:
+        beta, p_value, n_reg = test1_panel_regression(panel, horizon)
+        mean_ic, icir, t_stat, n_ic = test2_information_coefficient(panel, horizon)
+        rows.append({"Horizon": horizon, "Beta": beta, "p_value": p_value,
+                     "Mean IC": mean_ic, "ICIR": icir, "IC t-stat": t_stat,
+                     "Regression n": n_reg, "IC dates": n_ic})
+    return pd.DataFrame(rows)
 
 
 # Fetch data
@@ -347,7 +394,12 @@ app.layout = html.Div(
             ],
         ),
 
-        # Charts Grid
+        # Dashboard tabs
+        dcc.Tabs(
+            id="dashboard-tabs", value="market-tab",
+            colors={"border": "#334155", "primary": "#38bdf8", "background": "#1e293b"},
+            children=[
+                dcc.Tab(label="Market Intelligence", value="market-tab", children=[
         html.Div(
             style={
                 "display": "grid",
@@ -392,9 +444,43 @@ app.layout = html.Div(
                     ],
                 ),
             ],
-        )
+        ),
+                ]),
+                dcc.Tab(label="Alpha Signal Analysis", value="alpha-tab", children=[
+                    html.Div(style={"padding": "24px 0"}, children=[
+                        html.H2("Alpha signal analysis", style={"marginTop": 0}),
+                        html.P("Tests whether equipment-mention strength is associated with subsequent stock returns. Signals enter at the next close; this is research, not investment advice.", style={"color": "#94a3b8"}),
+                        html.Button("Run alpha analysis", id="run-alpha-button", n_clicks=0, style={"backgroundColor": "#38bdf8", "color": "#0f172a", "border": "none", "padding": "10px 16px", "borderRadius": "6px", "fontWeight": "600", "cursor": "pointer"}),
+                        html.Div(id="alpha-status", style={"margin": "16px 0", "color": "#94a3b8"}),
+                        dcc.Graph(id="alpha-metrics-chart"),
+                        dash_table.DataTable(
+                            id="alpha-results-table", data=[],
+                            columns=[{"name": c, "id": c} for c in ["Horizon", "Beta", "p_value", "Mean IC", "ICIR", "IC t-stat", "Regression n", "IC dates"]],
+                            style_table={"overflowX": "auto"}, style_header={"backgroundColor": "#334155", "fontWeight": "600"},
+                            style_cell={"backgroundColor": "#1e293b", "color": "#f8fafc", "padding": "10px", "textAlign": "left"},
+                        ),
+                    ]),
+                ]),
+            ],
+        ),
     ],
 )
+
+@app.callback(
+    [Output("alpha-metrics-chart", "figure"), Output("alpha-results-table", "data"), Output("alpha-status", "children")],
+    Input("run-alpha-button", "n_clicks"),
+    prevent_initial_call=True,
+)
+def update_alpha_analysis(n_clicks):
+    try:
+        results = run_alpha_analysis()
+        chart_data = results[["Horizon", "Mean IC"]].dropna()
+        fig = px.bar(chart_data, x="Horizon", y="Mean IC", title="Mean Information Coefficient by Horizon", template="plotly_dark", color="Horizon")
+        fig.update_layout(paper_bgcolor="#1e293b", plot_bgcolor="#1e293b", margin=dict(l=20, r=20, t=50, b=20), showlegend=False)
+        return fig, results.replace({pd.NA: None}).to_dict("records"), f"Analysis complete across {len(results)} horizons."
+    except Exception as exc:
+        logger.exception("Alpha analysis failed")
+        return empty_figure("Alpha analysis unavailable"), [], f"Alpha analysis unavailable: {exc}"
 
 @app.callback(
     [

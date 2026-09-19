@@ -7,7 +7,7 @@ AVITI,Element Biosciences,Element Biosciences,Private,NGS Sequencing,Razor-Blade
 Chromium Controller,10x Genomics,10x Genomics,TXG,Single-Cell,Razor-Blade,"[""10x"", ""chromium"", ""10x genomics"", ""chromium controller"", ""single-cell rnaseq"", ""scrna-seq""]"
 Visium / Xenium,10x Genomics,10x Genomics,TXG,Spatial Omics,Razor-Blade,"[""visium"", ""xenium"", ""10x visium"", ""10x xenium"", ""spatial transcriptomics""]"
 MERSCOPE,Vizgen,Vizgen,Private,Spatial Omics,Razor-Blade,"[""merscope"", ""merfish"", ""vizgen""]"
-PhenoCycler,Akoya Biosciences,Akoya Biosciences,AKYA,Spatial Omics,Razor-Blade,"[""phenocycler"", ""codex"", ""opal"", ""akoya""]"
+PhenoCycler,Akoya Biosciences (delisted July 2025, merged w/ Quanterix QTRX),Akoya Biosciences,AKYA,Spatial Omics,Razor-Blade,"[""phenocycler"", ""codex"", ""opal"", ""akoya""]"
 CosMx / GeoMx,Standard BioTools,Standard BioTools,LAB,Spatial Omics,Razor-Blade,"[""cosmx"", ""geomx"", ""nanostring"", ""standard biotools""]"
 FACSAria / LSRFortessa,BD Biosciences,BD,BDX,Flow Cytometry,Razor-Blade,"[""bd facs"", ""facsaria"", ""lsrfortessa"", ""fortessa"", ""bd rhapsody"", ""flow cytometer"", ""facs""]"
 CytoFLEX,Beckman Coulter,Danaher,DHR,Flow Cytometry,Razor-Blade,"[""cytoflex"", ""beckman coulter"", ""beckman""]"

@@ -14,8 +14,15 @@ logger = logging.getLogger(__name__)
 HORIZONS = {"1M": 21, "3M": 63, "6M": 126}          # trading days
 
 # Revenue exposure to this market (manual, pre-registered). 1.0 = pure play.
-PURITY = {"TXG": 1.0, "AKYA": 1.0, "ILMN": 0.6, "BRKR": 0.5,
+PURITY = {"TXG": 1.0, "ILMN": 0.6, "BRKR": 0.5,
           "RVTY": 0.4, "DHR": 0.15}
+
+# Mapping from registry tickers to yfinance tickers.
+# Some companies trade under different tickers on US markets vs their
+# primary listing (e.g., Oxford Nanopore trades as ONT.L on LSE).
+TICKER_MAP = {
+    "ONT": "ONT.L",   # Oxford Nanopore — LSE-listed, yfinance uses ONT.L
+}
 
 def normalize_market_days(values: pd.Series) -> pd.Series:
     """Normalize mixed naive/timezone-aware timestamps to local calendar days.
@@ -89,10 +96,12 @@ def to_weekly(panel: pd.DataFrame) -> pd.DataFrame:
 
 def fetch_prices(tickers, start, end) -> pd.DataFrame:
     import yfinance as yf
+    from src.alpha_backtest import TICKER_MAP
     frames = []
     for t in tickers:
-        try:  # yfinance usually returns history even for delisted tickers
-            c = yf.Ticker(t).history(start=start, end=end, auto_adjust=True)["Close"]
+        yf_ticker = TICKER_MAP.get(t, t)  # Map registry ticker to yfinance ticker
+        try:
+            c = yf.Ticker(yf_ticker).history(start=start, end=end, auto_adjust=True)["Close"]
             c = c.dropna().rename("close").reset_index().rename(columns={"Date": "day"})
             c["day"] = normalize_market_days(c["day"])
             c["ticker"] = t

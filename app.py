@@ -1,6 +1,10 @@
 import logging
 import os
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 import dash
 from dash import dash_table, html
 import pandas as pd
@@ -9,6 +13,7 @@ import psycopg2
 from dash import Input, Output, callback_context, dcc
 
 from src.stock_signals import build_stock_signals
+from src.walk_forward_validation import run_walk_forward_validation
 from src.alpha_backtest import (
     HORIZONS, PURITY, attach_returns, build_signal_panel, fetch_prices,
     test1_panel_regression, test2_information_coefficient, to_weekly,
@@ -121,24 +126,11 @@ def fetch_alpha_mention_panel():
 
 
 def run_alpha_analysis():
-    """Run the registered mention-signal backtest for dashboard display."""
+    """Run the leakage-aware, held-out mention-feature validation for display."""
     mentions = fetch_alpha_mention_panel()
     if mentions.empty:
         raise RuntimeError("No ticker-level mention data is available.")
-    weekly = to_weekly(build_signal_panel(mentions))
-    tickers = [ticker for ticker in weekly["ticker"].dropna().unique() if ticker in PURITY]
-    if not tickers:
-        raise RuntimeError("No listed-company signals are available.")
-    prices = fetch_prices(tickers, "2023-12-01", pd.Timestamp.utcnow().strftime("%Y-%m-%d"))
-    panel = attach_returns(weekly, prices)
-    rows = []
-    for horizon in HORIZONS:
-        beta, p_value, n_reg = test1_panel_regression(panel, horizon)
-        mean_ic, icir, t_stat, n_ic = test2_information_coefficient(panel, horizon)
-        rows.append({"Horizon": horizon, "Beta": beta, "p_value": p_value,
-                     "Mean IC": mean_ic, "ICIR": icir, "IC t-stat": t_stat,
-                     "Regression n": n_reg, "IC dates": n_ic})
-    return pd.DataFrame(rows)
+    return run_walk_forward_validation(mentions)
 
 
 # Fetch data
@@ -448,13 +440,13 @@ app.layout = html.Div(
                 ]),
                 dcc.Tab(label="Alpha Signal Analysis", value="alpha-tab", children=[
                     html.Div(style={"padding": "24px 0"}, children=[
-                        html.H2("Alpha signal analysis", style={"marginTop": 0}),
-                        html.P("Tests whether equipment-mention strength is associated with subsequent stock returns. Signals enter at the next close; this is research, not investment advice.", style={"color": "#94a3b8"}),
+                        html.H2("Walk-forward signal validation", style={"marginTop": 0}),
+                        html.P("Tests pre-specified mention features using a zero-filled daily panel and only held-out weekly observations. Signals enter at the next close. This is research, not investment advice.", style={"color": "#94a3b8"}),
                         html.Div(style={"backgroundColor": "#172554", "border": "1px solid #1e40af", "padding": "14px 16px", "borderRadius": "6px", "marginBottom": "16px"}, children=[
                             html.H4("How to read the results", style={"margin": "0 0 8px 0"}),
-                            html.P("Beta measures the change in forward log return associated with a one-unit increase in the mention signal, after controlling for prior 12-month return and ticker. Positive beta means stronger mention signals were associated with higher subsequent returns; p-value below 0.05 is a conventional, not definitive, significance threshold.", style={"margin": "6px 0", "fontSize": "13px"}),
-                            html.P("Mean IC is the average daily Spearman correlation between signal strength and future returns (from -1 to +1). ICIR is Mean IC divided by its variability, while IC t-stat measures how reliably the average differs from zero. Regression n is the number of ticker observations; IC dates is the number of dates used for the correlation.", style={"margin": "6px 0", "fontSize": "13px"}),
-                            html.P("Treat small samples, noisy estimates, missing prices, transaction costs, and multiple testing as important limitations. These figures show association, not proof that the signal can be traded profitably.", style={"margin": "6px 0", "fontSize": "13px", "color": "#fbbf24"}),
+                            html.P("Each feature is calculated from trailing calendar-day mention data: 30-day volume, 30-day acceleration, paper breadth, or 90-day share change. The first 52 weeks plus a horizon-specific embargo are withheld; displayed observations are held-out only.", style={"margin": "6px 0", "fontSize": "13px"}),
+                            html.P("Mean IC is the weekly Spearman rank correlation with future return. ICIR measures consistency. Top-minus-bottom is the average future log-return spread between the highest and lowest ranked companies. A feature is not eligible for a model unless its out-of-sample IC confidence interval is positive and the result is robust across horizons.", style={"margin": "6px 0", "fontSize": "13px"}),
+                            html.P("This small universe is exploratory. Missing prices, delistings, overlapping returns, transaction costs and feature-selection bias remain important limitations.", style={"margin": "6px 0", "fontSize": "13px", "color": "#fbbf24"}),
                         ]),
                         html.H4("Company research signal", style={"marginBottom": "6px"}),
                         html.P("This is the company-level screen behind the analysis: Positive research signal means at least 5 mentions in the recent 90 days and at least 10% growth versus the preceding 90 days; Watch means at least 3 recent mentions; Insufficient evidence means there is not enough recent mention volume. It is evidence about research adoption, not a buy or sell recommendation.", style={"color": "#94a3b8", "fontSize": "13px"}),
@@ -467,12 +459,12 @@ app.layout = html.Div(
                             ], style_table={"overflowX": "auto"}, style_header={"backgroundColor": "#334155", "fontWeight": "600"},
                             style_cell={"backgroundColor": "#1e293b", "color": "#f8fafc", "padding": "10px", "textAlign": "left"},
                         ),
-                        html.Button("Run alpha analysis", id="run-alpha-button", n_clicks=0, style={"backgroundColor": "#38bdf8", "color": "#0f172a", "border": "none", "padding": "10px 16px", "borderRadius": "6px", "fontWeight": "600", "cursor": "pointer", "marginTop": "16px"}),
+                        html.Button("Run held-out validation", id="run-alpha-button", n_clicks=0, style={"backgroundColor": "#38bdf8", "color": "#0f172a", "border": "none", "padding": "10px 16px", "borderRadius": "6px", "fontWeight": "600", "cursor": "pointer", "marginTop": "16px"}),
                         html.Div(id="alpha-status", style={"margin": "16px 0", "color": "#94a3b8"}),
                         dcc.Graph(id="alpha-metrics-chart"),
                         dash_table.DataTable(
                             id="alpha-results-table", data=[],
-                            columns=[{"name": c, "id": c} for c in ["Horizon", "Beta", "p_value", "Mean IC", "ICIR", "IC t-stat", "Regression n", "IC dates"]],
+                            columns=[{"name": c, "id": c} for c in ["feature", "horizon", "observations", "weeks", "mean_ic", "icir", "ic_ci_low", "ic_ci_high", "mean_top_bottom_log_return", "spread_weeks", "holdout_start"]],
                             style_table={"overflowX": "auto"}, style_header={"backgroundColor": "#334155", "fontWeight": "600"},
                             style_cell={"backgroundColor": "#1e293b", "color": "#f8fafc", "padding": "10px", "textAlign": "left"},
                         ),
@@ -491,11 +483,11 @@ app.layout = html.Div(
 def update_alpha_analysis(n_clicks):
     try:
         results = run_alpha_analysis()
-        chart_data = results[["Horizon", "Mean IC"]].dropna()
-        fig = px.bar(chart_data, x="Horizon", y="Mean IC", title="Mean Information Coefficient by Horizon", template="plotly_dark", color="Horizon")
+        chart_data = results.dropna(subset=["mean_ic"])
+        fig = px.bar(chart_data, x="feature", y="mean_ic", title="Held-out Mean Information Coefficient by Feature", template="plotly_dark", color="horizon", barmode="group")
         fig.update_layout(paper_bgcolor="#1e293b", plot_bgcolor="#1e293b", margin=dict(l=20, r=20, t=50, b=20), showlegend=False)
         company_signals = build_stock_signals(df)
-        return fig, results.replace({pd.NA: None}).to_dict("records"), company_signals.to_dict("records"), f"Analysis complete across {len(results)} horizons."
+        return fig, results.replace({pd.NA: None}).to_dict("records"), company_signals.to_dict("records"), f"Held-out validation complete: {len(results)} feature-horizon tests."
     except Exception as exc:
         logger.exception("Alpha analysis failed")
         return empty_figure("Alpha analysis unavailable"), [], [], f"Alpha analysis unavailable: {exc}"

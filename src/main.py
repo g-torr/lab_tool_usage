@@ -1,6 +1,7 @@
 import os
 import time
 import requests
+import hashlib
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from bs4 import BeautifulSoup
@@ -59,12 +60,29 @@ def init_db():
             title TEXT,
             category TEXT,
             date TEXT,
+            first_version INTEGER,
+            first_version_date DATE,
+            source_version_url TEXT,
+            first_version_api_url TEXT,
+            methods_sha256 TEXT,
+            methods_fetched_at TIMESTAMPTZ,
+            processed_at TIMESTAMPTZ,
             abstract TEXT,
             server TEXT DEFAULT 'biorxiv',
             processed INTEGER DEFAULT 0
         )
     """)
     cursor.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS server TEXT DEFAULT 'biorxiv'")
+    # These migrations leave historical rows unqualified for alpha analysis.
+    # They must be re-ingested from the first-version API metadata rather than
+    # silently treated as point-in-time observations.
+    cursor.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS first_version INTEGER")
+    cursor.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS first_version_date DATE")
+    cursor.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS source_version_url TEXT")
+    cursor.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS first_version_api_url TEXT")
+    cursor.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS methods_sha256 TEXT")
+    cursor.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS methods_fetched_at TIMESTAMPTZ")
+    cursor.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS processed_at TIMESTAMPTZ")
     
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS machine_mentions (
@@ -158,6 +176,53 @@ def finish_ingestion_run(run_id, status, error=None):
 
 # STAGE 1 & 2: HARVESTING
 # ==========================================
+def fetch_first_version_metadata(session, doi, server):
+    """Return metadata for the first public version of a preprint.
+
+    The date-range API can return later revisions.  Alpha features must use
+    the release date and content of version 1, never a revision discovered
+    after the fact.
+    """
+    normalized_server = (server or "biorxiv").lower()
+    if normalized_server not in {"biorxiv", "medrxiv"}:
+        raise ValueError(f"Unsupported preprint server: {server!r}")
+
+    api_url = f"https://api.biorxiv.org/details/{normalized_server}/{doi}/na/json"
+    response = session.get(api_url, timeout=30)
+    if response.status_code != 200:
+        raise RuntimeError(f"bioRxiv API returned HTTP {response.status_code} for {api_url}")
+    records = response.json().get("collection", [])
+    if not records:
+        raise RuntimeError(f"bioRxiv API returned no version metadata for {doi}")
+
+    def version_number(record):
+        try:
+            return int(record.get("version", 1))
+        except (TypeError, ValueError):
+            return 1
+
+    first = min(records, key=version_number)
+    version = version_number(first)
+    first_date = first.get("date")
+    if not first_date:
+        raise RuntimeError(f"bioRxiv API returned no date for version 1 of {doi}")
+    base_domain = {
+        "biorxiv": "https://www.biorxiv.org/content",
+        "medrxiv": "https://www.medrxiv.org/content",
+    }[normalized_server]
+    return {
+        "doi": doi,
+        "version": version,
+        "date": first_date,
+        "title": first.get("title"),
+        "category": (first.get("category") or "").lower(),
+        "abstract": first.get("abstract"),
+        "server": normalized_server,
+        "source_version_url": f"{base_domain}/{doi}v{version}.full",
+        "first_version_api_url": api_url,
+    }
+
+
 def pipeline_stage_1_and_2(start_date, end_date):
     init_db()
     conn = get_db_connection()
@@ -183,6 +248,7 @@ def pipeline_stage_1_and_2(start_date, end_date):
             if not papers: break
             
             batch_candidates = []
+            first_version_cache = {}
             for paper in papers:
                 paper_category = paper.get("category", "").lower()
                 if paper_category in TARGET_CATEGORIES:
@@ -192,13 +258,33 @@ def pipeline_stage_1_and_2(start_date, end_date):
                     
                     if any(term in title or term in abstract for term in EXCLUSION_TERMS): continue
                     if any(word in abstract or word in title for word in BROAD_CATCHMENT):
-                        batch_candidates.append((doi, paper.get("title"), paper_category, paper.get("date"), paper.get("abstract"), paper.get("server", "biorxiv").lower()))
+                        server = paper.get("server", "biorxiv").lower()
+                        cache_key = (doi, server)
+                        if cache_key not in first_version_cache:
+                            first_version_cache[cache_key] = fetch_first_version_metadata(session, doi, server)
+                        first = first_version_cache[cache_key]
+                        batch_candidates.append((
+                            first["doi"], first["title"], first["category"], first["date"],
+                            first["version"], first["date"], first["source_version_url"],
+                            first["first_version_api_url"], first["abstract"], first["server"],
+                        ))
             
             if batch_candidates:
                 cursor.executemany("""
-                    INSERT INTO candidates (doi, title, category, date, abstract, server)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (doi) DO NOTHING
+                    INSERT INTO candidates
+                    (doi, title, category, date, first_version, first_version_date,
+                     source_version_url, first_version_api_url, abstract, server)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (doi) DO UPDATE SET
+                        title = EXCLUDED.title,
+                        category = EXCLUDED.category,
+                        date = EXCLUDED.date,
+                        first_version = EXCLUDED.first_version,
+                        first_version_date = EXCLUDED.first_version_date,
+                        source_version_url = EXCLUDED.source_version_url,
+                        first_version_api_url = EXCLUDED.first_version_api_url,
+                        abstract = EXCLUDED.abstract,
+                        server = EXCLUDED.server
                 """, batch_candidates)
                 conn.commit()
                 logger.info(f"   Saved {len(batch_candidates)} candidates.")
@@ -214,7 +300,7 @@ def pipeline_stage_1_and_2(start_date, end_date):
 # ==========================================
 # WEB SCRAPER
 # ==========================================
-def fetch_methods_text_from_web(doi, server="biorxiv"):
+def fetch_methods_text_from_web(doi, server="biorxiv", version=None):
     session = requests.Session()
     retries = Retry(
         total=5,
@@ -239,7 +325,8 @@ def fetch_methods_text_from_web(doi, server="biorxiv"):
         logger.warning("Unknown preprint server %r for %s; skipping.", server, doi)
         return None
 
-    web_url = f"{base_domain}/{doi}.full"
+    version_suffix = f"v{int(version)}" if version is not None else ""
+    web_url = f"{base_domain}/{doi}{version_suffix}.full"
     heading_weights = {f"h{i}": i for i in range(1, 7)}
     stop_terms = ["reference", "acknowledgement", "conflict of interest", "funding", "author contribution"]
 
@@ -301,9 +388,9 @@ def fetch_methods_text_from_web(doi, server="biorxiv"):
 # STAGE 3: LLM + SEMANTIC RESOLUTION
 # ==========================================
 def pipeline_stage_3_execution():
-    from novelty_classifier import classify_novelty
-    from semantic_resolver import SemanticMachineResolver
-    from machine_extractor import (
+    from src.novelty_classifier import classify_novelty
+    from src.semantic_resolver import SemanticMachineResolver
+    from src.machine_extractor import (
         extract_machines_hybrid,
         load_registry_gazetteer,
         load_stage2_labels,
@@ -319,21 +406,24 @@ def pipeline_stage_3_execution():
     print("Initializing Semantic Machine Resolver...")
     resolver = SemanticMachineResolver()
     
-    cursor.execute("SELECT doi, abstract, server FROM candidates WHERE processed = 0")
+    cursor.execute(
+        "SELECT doi, abstract, server, first_version FROM candidates "
+        "WHERE processed = 0 AND first_version IS NOT NULL AND first_version_date IS NOT NULL"
+    )
     unprocessed = cursor.fetchall()
     print(f"Found {len(unprocessed)} unprocessed candidates.")
     
-    for doi, abstract, server in unprocessed:
+    for doi, abstract, server, first_version in unprocessed:
         print(f"\n{'='*70}")
         print(f"Processing: {doi}")
         print(f"{'='*70}")
         
-        methods_text = fetch_methods_text_from_web(doi, server)
+        methods_text = fetch_methods_text_from_web(doi, server, first_version)
         time.sleep(1.0)
         
         if not methods_text:
             print(f"   ❌ Skipping: No methods text found.")
-            cursor.execute("UPDATE candidates SET processed = 1 WHERE doi = %s", (doi,))
+            cursor.execute("UPDATE candidates SET processed = 1, processed_at = NOW() WHERE doi = %s", (doi,))
             conn.commit()
             continue
         
@@ -343,7 +433,7 @@ def pipeline_stage_3_execution():
         
         if not novelty_result.is_novel_experiment:
             print(f"   ❌ [NON-NOVEL] {novelty_result.reasoning}")
-            cursor.execute("UPDATE candidates SET processed = 1 WHERE doi = %s", (doi,))
+            cursor.execute("UPDATE candidates SET processed = 1, processed_at = NOW() WHERE doi = %s", (doi,))
             conn.commit()
             continue
         
@@ -355,7 +445,7 @@ def pipeline_stage_3_execution():
         
         if not raw_machines:
             print(f"   ⚠️  [NO MACHINES] No equipment mentioned in methods.")
-            cursor.execute("UPDATE candidates SET processed = 1 WHERE doi = %s", (doi,))
+            cursor.execute("UPDATE candidates SET processed = 1, processed_at = NOW() WHERE doi = %s", (doi,))
             conn.commit()
             continue
         
@@ -379,7 +469,11 @@ def pipeline_stage_3_execution():
                 status = f"→ UNRESOLVED [conf: {conf:.2f}]"
                 print(f"      ⚠️  {raw_machine} {status}")
         
-        cursor.execute("UPDATE candidates SET processed = 1 WHERE doi = %s", (doi,))
+        cursor.execute(
+            "UPDATE candidates SET processed = 1, processed_at = NOW(), methods_sha256 = %s, "
+            "methods_fetched_at = NOW() WHERE doi = %s",
+            (hashlib.sha256(methods_text.encode("utf-8")).hexdigest(), doi),
+        )
         conn.commit()
 
     cursor.close()
@@ -394,11 +488,10 @@ def pipeline_stage_3_execution():
 def build_parser():
     parser = argparse.ArgumentParser(description='Run the semantic pipeline for spatial transcriptomics equipment tracking.')
     parser.add_argument(
-        '--append',
-        '--no-reset',
-        dest='append',
+        '--reset',
         action='store_true',
-        help='Append newly discovered papers to the existing database without clearing it first.',
+        default=False,
+        help='DANGER: Drop all existing tables and rebuild from scratch.',
     )
     parser.add_argument(
         '--start-date',
@@ -410,10 +503,15 @@ def build_parser():
         default=None,
         help='Optional explicit last publication date (YYYY-MM-DD); otherwise use today and the database checkpoint.',
     )
+    parser.add_argument(
+        '--process-pending',
+        action='store_true',
+        help='Process already-harvested candidates that are queued for extraction; do not harvest new papers.',
+    )
     return parser
 
 if __name__ == "__main__":
-    from create_registry import create_registry
+    from src.create_registry import create_registry
 
     parser = build_parser()
     args = parser.parse_args()
@@ -421,11 +519,21 @@ if __name__ == "__main__":
     logger.info("Executing Semantic Pipeline Architecture...")
     create_registry()
 
-    if args.append:
-        logger.info("Append mode enabled: preserving existing database entries.")
+    if args.process_pending:
+        if args.start_date is not None or args.end_date is not None:
+            parser.error("--process-pending cannot be combined with --start-date or --end-date")
         init_db()
-    else:
+        pipeline_stage_3_execution()
+        raise SystemExit(0)
+
+    if args.reset:
+        logger.warning("WARNING: --reset flag provided. DROPPING ALL TABLES.")
         reset_db()
+        logger.info("Database reset complete.")
+    else:
+        # Default: safe mode — preserve existing data, add new papers
+        init_db()
+        logger.info("Safe mode: preserving existing database entries (use --reset to drop all tables).")
 
     if (args.start_date is None) != (args.end_date is None):
         parser.error("--start-date and --end-date must be provided together")

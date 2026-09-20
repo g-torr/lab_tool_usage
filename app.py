@@ -14,10 +14,6 @@ from dash import Input, Output, callback_context, dcc
 
 from src.stock_signals import build_stock_signals
 from src.walk_forward_validation import run_walk_forward_validation
-from src.alpha_backtest import (
-    HORIZONS, PURITY, attach_returns, build_signal_panel, fetch_prices,
-    test1_panel_regression, test2_information_coefficient, to_weekly,
-)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -80,7 +76,9 @@ def fetch_database_data():
             FROM candidates c
             JOIN machine_mentions m ON c.doi = m.doi
             LEFT JOIN registry_machines r ON TRIM(r.canonical_name) = TRIM(m.resolved_machine)
-            WHERE c.date IS NOT NULL
+            WHERE c.first_version_date IS NOT NULL
+              AND c.source_version_url IS NOT NULL
+              AND c.methods_sha256 IS NOT NULL
             GROUP BY day, resolved_machine, r.parent_company, r.ticker
             ORDER BY day ASC, mention_count DESC;
         """

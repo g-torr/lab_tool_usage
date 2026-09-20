@@ -13,10 +13,6 @@ logger = logging.getLogger(__name__)
 
 HORIZONS = {"1M": 21, "3M": 63, "6M": 126}          # trading days
 
-# Revenue exposure to this market (manual, pre-registered). 1.0 = pure play.
-PURITY = {"TXG": 1.0, "ILMN": 0.6, "BRKR": 0.5,
-          "RVTY": 0.4, "DHR": 0.15}
-
 # Mapping from registry tickers to yfinance tickers.
 # Some companies trade under different tickers on US markets vs their
 # primary listing (e.g., Oxford Nanopore trades as ONT.L on LSE).
@@ -48,7 +44,12 @@ def fetch_mention_panel() -> pd.DataFrame:
         JOIN machine_mentions m ON c.doi = m.doi
         LEFT JOIN registry_machines r
                ON TRIM(r.canonical_name) = TRIM(m.resolved_machine)
-        WHERE c.date IS NOT NULL
+        -- A first-version date alone is not sufficient: historical mentions
+        -- may have been extracted from a later revision.  Require the hash
+        -- written only after version-specific methods extraction.
+        WHERE c.first_version_date IS NOT NULL
+          AND c.source_version_url IS NOT NULL
+          AND c.methods_sha256 IS NOT NULL
         GROUP BY c.date, r.ticker
     """
     conn = psycopg2.connect(os.environ["DATABASE_URL"])
@@ -85,7 +86,6 @@ def build_signal_panel(mentions: pd.DataFrame) -> pd.DataFrame:
     for col in ("vel", "dshare", "bvel"):
         m[f"z_{col}"] = g[col].transform(rolling_z)
     m["z"] = m[["z_vel", "z_dshare", "z_bvel"]].mean(axis=1)
-    m["z"] = m["z"] * m["ticker"].map(PURITY).fillna(0.0)   # purity weighting
     return m
 
 def to_weekly(panel: pd.DataFrame) -> pd.DataFrame:
@@ -103,6 +103,9 @@ def fetch_prices(tickers, start, end) -> pd.DataFrame:
         try:
             c = yf.Ticker(yf_ticker).history(start=start, end=end, auto_adjust=True)["Close"]
             c = c.dropna().rename("close").reset_index().rename(columns={"Date": "day"})
+            if c.empty:
+                logger.warning("price download returned no rows for %s", t)
+                continue
             c["day"] = normalize_market_days(c["day"])
             c["ticker"] = t
             frames.append(c)
@@ -157,7 +160,7 @@ def test2_information_coefficient(d: pd.DataFrame, horizon: str):
 
 def main():
     weekly = to_weekly(build_signal_panel(fetch_mention_panel()))
-    tickers = [t for t in weekly["ticker"].unique() if t in PURITY]
+    tickers = sorted(weekly["ticker"].unique())
     prices = fetch_prices(tickers, "2023-12-01", "2026-08-15")
     panel = attach_returns(weekly, prices)
 

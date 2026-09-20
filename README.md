@@ -1,6 +1,6 @@
 # Lab Tool Usage Tracker
 
-This project tracks the usage of laboratory equipment in scientific literature by analyzing bioRxiv/medRxiv preprints. It uses natural language processing to extract and resolve equipment mentions, assess novelty, and visualize trends over time.
+This project tracks the usage of laboratory equipment in scientific literature by analyzing bioRxiv/medRxiv preprints. It uses natural language processing to extract and resolve equipment mentions, assess novelty, and visualize trends over time. Alpha research is dated to the first public preprint version, not later revisions.
 
 ## Features
 
@@ -24,7 +24,7 @@ The pipeline consists of three main stages:
    - **Novelty Classification**: Determines if preprint describes novel experimental work
    - **Machine Extraction**: Extracts equipment mentions from methods text
    - **Semantic Resolution**: Maps raw mentions to known equipment entities
-   - Stores results in the `machine_mentions` table
+   - Stores results in the `machine_mentions` table, tied to the first preprint version
 
 3. **Dashboard**:
    - Provides interactive visualizations of equipment trends
@@ -79,7 +79,7 @@ python -c "from src.db import init_db; init_db()"
 Or if you prefer to let the pipeline handle it (not recommended for production as it will reset data):
 ```bash
 # WARNING: This will drop existing tables!
-python src/interactive_dashboard.py  # Without --append flag
+python -m src.main  # Without --append flag
 ```
 
 For production use, we recommend initializing the database separately and then using the `--append` flag to preserve data.
@@ -92,10 +92,28 @@ To run the complete harvesting and processing pipeline:
 
 ```bash
 # For a fresh run (WARNING: clears existing data)
-python src/interactive_dashboard.py
+python -m src.main
 
 # To append new data without clearing existing records
-python src/interactive_dashboard.py --append
+python -m src.main --append
+```
+
+### Backfilling an existing database
+
+To preserve an existing corpus, first backfill first-version metadata without
+altering machine mentions:
+
+```bash
+python scripts/backfill_first_version_metadata.py --apply
+```
+
+Those legacy mentions remain excluded from alpha research because they may have
+been extracted from a later preprint revision. To replace them with version-1
+extractions, opt in explicitly:
+
+```bash
+python scripts/backfill_first_version_metadata.py --apply --queue-reprocess
+python -m src.main --process-pending
 ```
 
 ### Running Just the Dashboard
@@ -118,7 +136,7 @@ python -m pytest
 
 ### Categories
 
-Modify `TARGET_CATEGORIES` in `src/interactive_dashboard.py` to change which bioRxiv categories are processed.
+Modify `TARGET_CATEGORIES` in `src/main.py` to change which bioRxiv categories are processed.
 
 ### Equipment Keywords
 
@@ -153,7 +171,7 @@ lab_tool_usage/
 ├── .gitignore              # Git ignore rules
 ├── src/
 │   ├── __init__.py
-│   ├── interactive_dashboard.py  # Main pipeline orchestrator
+│   ├── main.py                   # Main pipeline orchestrator
 │   ├── app.py              # Dashboard (symlink or copy to root app.py)
 │   ├── db.py               # Database connection helpers
 │   ├── machine_extractor.py    # Equipment extraction logic
@@ -179,7 +197,7 @@ lab_tool_usage/
 1. **Harvesting**: The pipeline queries bioRxiv/medRxiv for recent preprints in biomedical categories.
 2. **Filtering**: Preprints are filtered for equipment-related keywords in title/abstract.
 3. **Novelty Check**: Novel wet-lab work is identified using a local zero-shot classifier.
-4. **Extraction**: Equipment mentions are extracted from methods sections using a rule-based approach.
+4. **Extraction**: Equipment mentions are extracted from the archived first-version methods page using a rule-based approach.
 5. **Resolution**: Raw mentions are matched to known equipment entities using fuzzy matching and a gazetteer.
 6. **Storage**: Results are stored in PostgreSQL for analysis and visualization.
 7. **Visualization**: The dashboard shows temporal trends and breakdowns of equipment usage.

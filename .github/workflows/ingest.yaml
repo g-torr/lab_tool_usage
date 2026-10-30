@@ -34,7 +34,8 @@ jobs:
       - run: pytest tests/test_postgres_registry.py
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-      - run: python src/main.py --append
+      # The default mode preserves existing records and harvests only new papers.
+      - run: python src/main.py
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}

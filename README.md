@@ -76,13 +76,12 @@ You can create them by running the initialization script:
 python -c "from src.db import init_db; init_db()"
 ```
 
-Or if you prefer to let the pipeline handle it (not recommended for production as it will reset data):
+Or let the pipeline create missing tables while preserving existing data:
 ```bash
-# WARNING: This will drop existing tables!
-python -m src.main  # Without --append flag
+python -m src.main
 ```
 
-For production use, we recommend initializing the database separately and then using the `--append` flag to preserve data.
+For production use, the default command is safe to run repeatedly: it preserves existing records and adds newly found papers. Use `--reset` only when you intentionally want to rebuild the database from scratch.
 
 ## Usage
 
@@ -92,10 +91,10 @@ To run the complete harvesting and processing pipeline:
 
 ```bash
 # For a fresh run (WARNING: clears existing data)
-python -m src.main
+python -m src.main --reset
 
 # To append new data without clearing existing records
-python -m src.main --append
+python -m src.main
 ```
 
 ### Backfilling an existing database

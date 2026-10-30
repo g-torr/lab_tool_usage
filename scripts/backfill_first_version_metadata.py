@@ -149,7 +149,7 @@ def main() -> int:
     if args.apply and not args.queue_reprocess:
         logger.info("Mentions were retained and remain excluded from alpha until version-1 reprocessing.")
     if args.queue_reprocess:
-        logger.info("Run `python -m src.main --append` to process the queued candidates.")
+        logger.info("Run `python -m src.main --process-pending` to process the queued candidates.")
     return 1 if failures else 0
 
 

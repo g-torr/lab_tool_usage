@@ -46,6 +46,14 @@ DRY_LAB_TRIGGERS = ["public database", "publicly available", "geo", "sra", "arra
 INITIAL_SCAN_DATE = date(2023, 1, 1)
 SCAN_OVERLAP_DAYS = 1
 MAX_SCAN_DAYS = 7
+METHOD_HEADING_TERMS = (
+    "materials and methods",
+    "methods",
+    "method",
+    "methodology",
+    "method details",
+    "experimental procedures",
+)
 
 # ==========================================
 # DATABASE INITIALIZATION & RESET
@@ -354,7 +362,7 @@ def fetch_methods_text_from_web(doi, server="biorxiv", version=None):
             seen.add(id(heading))
             heading_text = heading.get_text(" ", strip=True).lower()
             normalized_heading = " ".join(heading_text.split())
-            if not any(term in normalized_heading for term in ("materials and methods", "methods", "methodology", "experimental procedures")):
+            if not any(term in normalized_heading for term in METHOD_HEADING_TERMS):
                 continue
 
             target_weight = heading_weights.get(heading.name, 2)
@@ -423,8 +431,7 @@ def pipeline_stage_3_execution():
         
         if not methods_text:
             print(f"   ❌ Skipping: No methods text found.")
-            cursor.execute("UPDATE candidates SET processed = 1, processed_at = NOW() WHERE doi = %s", (doi,))
-            conn.commit()
+            logger.warning("Leaving %s unprocessed so a future run can retry methods extraction.", doi)
             continue
         
         # STAGE 1: Novelty Classification
